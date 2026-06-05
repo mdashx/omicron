@@ -4,6 +4,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import type { SessionArchiveConfig } from "./session-archive.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
@@ -113,6 +114,7 @@ export interface Settings {
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
+	sessionArchive?: SessionArchiveConfig;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -657,6 +659,10 @@ export class SettingsManager {
 	getSessionDir(): string | undefined {
 		const sessionDir = this.settings.sessionDir;
 		return sessionDir ? normalizePath(sessionDir) : sessionDir;
+	}
+
+	getSessionArchive(): SessionArchiveConfig | undefined {
+		return this.settings.sessionArchive ? structuredClone(this.settings.sessionArchive) : undefined;
 	}
 
 	getDefaultProvider(): string | undefined {

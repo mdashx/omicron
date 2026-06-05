@@ -5,6 +5,7 @@
  *
  * Test with: npx tsx src/cli-new.ts [args...]
  */
+import chalk from "chalk";
 import { APP_NAME } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { main } from "./main.ts";
@@ -17,4 +18,8 @@ process.emitWarning = (() => {}) as typeof process.emitWarning;
 // Runtime settings are applied once SettingsManager has loaded global/project settings.
 configureHttpDispatcher();
 
-main(process.argv.slice(2));
+main(process.argv.slice(2)).catch((error: unknown) => {
+	const message = error instanceof Error ? error.message : String(error);
+	console.error(chalk.red(`Error: ${message}`));
+	process.exit(1);
+});

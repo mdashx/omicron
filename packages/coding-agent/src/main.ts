@@ -24,6 +24,7 @@ import {
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
+import { createSessionArchiveRuntime } from "./core/session-archive.ts";
 import type { ExtensionFactory } from "./core/extensions/types.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
@@ -742,6 +743,13 @@ export async function main(args: string[], options?: MainOptions) {
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
 		});
+		const archive = createSessionArchiveRuntime(created.session, {
+			config: settingsManager.getSessionArchive(),
+			cwd: sessionManager.getCwd(),
+			agentDir,
+			mode: !process.stdin.isTTY && appMode === "interactive" ? "print" : appMode,
+			sessionStartReason: sessionStartEvent?.reason ?? "startup",
+		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
 			created.session.setThinkingLevel(created.session.thinkingLevel);
@@ -749,6 +757,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 		return {
 			...created,
+			archive,
 			services,
 			diagnostics,
 		};

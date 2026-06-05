@@ -25,6 +25,21 @@ export {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
+export {
+	PiArchiveEnforcement,
+	PiArchiveWriter,
+	SessionArchiveDefaults,
+	createSessionArchiveRuntime,
+	type PiArchiveEvent,
+	type PiSessionEnvelope,
+	type ResolvedSessionArchiveConfig,
+	type SessionArchiveConfig,
+	type SessionArchiveEventType,
+	type SessionArchiveRedactMode,
+	type SessionArchiveRole,
+	type SessionArchiveRuntime,
+	resolveSessionArchiveConfig,
+} from "./session-archive.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";

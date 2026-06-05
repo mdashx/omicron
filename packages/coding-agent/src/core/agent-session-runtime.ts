@@ -5,6 +5,7 @@ import type { AgentSession } from "./agent-session.ts";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
 import type { ReplacedSessionContext, SessionShutdownEvent, SessionStartEvent } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import type { SessionArchiveRuntime } from "./session-archive.ts";
 import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
 import { SessionManager } from "./session-manager.ts";
@@ -18,6 +19,7 @@ import { SessionManager } from "./session-manager.ts";
 export interface CreateAgentSessionRuntimeResult extends CreateAgentSessionResult {
 	services: AgentSessionServices;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
+	archive?: SessionArchiveRuntime;
 }
 
 /**
@@ -73,6 +75,7 @@ export class AgentSessionRuntime {
 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
+	private _archive?: SessionArchiveRuntime;
 
 	constructor(
 		_session: AgentSession,
@@ -80,12 +83,14 @@ export class AgentSessionRuntime {
 		createRuntime: CreateAgentSessionRuntimeFactory,
 		_diagnostics: AgentSessionRuntimeDiagnostic[] = [],
 		_modelFallbackMessage?: string,
+		_archive?: SessionArchiveRuntime,
 	) {
 		this._session = _session;
 		this._services = _services;
 		this.createRuntime = createRuntime;
 		this._diagnostics = _diagnostics;
 		this._modelFallbackMessage = _modelFallbackMessage;
+		this._archive = _archive;
 	}
 
 	get services(): AgentSessionServices {
@@ -164,8 +169,19 @@ export class AgentSessionRuntime {
 			reason,
 			targetSessionFile,
 		});
-		this.beforeSessionInvalidate?.();
-		this.session.dispose();
+		let archiveError: unknown;
+		try {
+			this._archive?.dispose(reason, targetSessionFile);
+		} catch (error) {
+			archiveError = error;
+		} finally {
+			this._archive = undefined;
+			this.beforeSessionInvalidate?.();
+			this.session.dispose();
+		}
+		if (archiveError) {
+			throw archiveError instanceof Error ? archiveError : new Error(String(archiveError));
+		}
 	}
 
 	private apply(result: CreateAgentSessionRuntimeResult): void {
@@ -173,6 +189,7 @@ export class AgentSessionRuntime {
 		this._services = result.services;
 		this._diagnostics = result.diagnostics;
 		this._modelFallbackMessage = result.modelFallbackMessage;
+		this._archive = result.archive;
 	}
 
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
@@ -379,8 +396,19 @@ export class AgentSessionRuntime {
 			type: "session_shutdown",
 			reason: "quit",
 		});
-		this.beforeSessionInvalidate?.();
-		this.session.dispose();
+		let archiveError: unknown;
+		try {
+			this._archive?.dispose("quit");
+		} catch (error) {
+			archiveError = error;
+		} finally {
+			this._archive = undefined;
+			this.beforeSessionInvalidate?.();
+			this.session.dispose();
+		}
+		if (archiveError) {
+			throw archiveError instanceof Error ? archiveError : new Error(String(archiveError));
+		}
 	}
 }
 
@@ -407,6 +435,7 @@ export async function createAgentSessionRuntime(
 		createRuntime,
 		result.diagnostics,
 		result.modelFallbackMessage,
+		result.archive,
 	);
 }
 
