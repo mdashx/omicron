@@ -8,18 +8,44 @@ This must be enforced by runtime wiring, not by prompting the model to remember 
 
 ---
 
-## 1. `SessionArchiveConfig`
+## 1. `SessionArchiveDefaults` and `SessionArchiveConfig`
 
 ### Prose Spec
 
-`SessionArchiveConfig` defines whether archiving is enabled, where Pi writes the archive, which event types are captured, and how the archive behaves on failure.
+Pi should ship with a built-in default archive configuration for everything.
 
-Pi should load this before the agent loop starts. If archiving is required and the config is missing or invalid, startup should fail.
+The user may override any part of it with config or environment variables, but a working archive path and sensible defaults should exist even when the user does nothing.
+
+If the archive directory does not exist, Pi should create it.
 
 ### Z Spec
 
 ```text
+SessionArchiveDefaults
+  enabled: 𝔹
+  repoPath: seq CHAR
+  fileLayout: seq CHAR
+  outputFormat: seq CHAR
+  captureEvents: ℙ seq CHAR
+  redactMode: seq CHAR
+  failClosed: 𝔹
+where
+  enabled = true
+  repoPath ≠ ⟨⟩
+  fileLayout ≠ ⟨⟩
+  outputFormat = ⟨"jsonl"⟩
+  failClosed = true
+
 SessionArchiveConfig
+  enabled?: 𝔹
+  repoPath?: seq CHAR
+  fileLayout?: seq CHAR
+  outputFormat?: seq CHAR
+  captureEvents?: ℙ seq CHAR
+  redactMode?: seq CHAR
+  failClosed?: 𝔹
+
+ResolvedSessionArchiveConfig
   enabled: 𝔹
   repoPath: seq CHAR
   fileLayout: seq CHAR
@@ -37,10 +63,35 @@ where
 
 ### Data examples
 
+Default config:
+
 ```json
 {
   "enabled": true,
-  "repoPath": "/home/easter/session-archive-repo",
+  "repoPath": "~/.pi/agent/session-archive",
+  "fileLayout": "yyyy/mm/dd/sessionId.jsonl",
+  "outputFormat": "jsonl",
+  "captureEvents": ["session_start", "message", "tool_call", "tool_result", "session_end", "error"],
+  "redactMode": "minimal",
+  "failClosed": true
+}
+```
+
+User overrides:
+
+```json
+{
+  "repoPath": "/home/easter/custom-archive",
+  "redactMode": "strict"
+}
+```
+
+Resolved runtime config:
+
+```json
+{
+  "enabled": true,
+  "repoPath": "/home/easter/.pi/agent/session-archive",
   "fileLayout": "yyyy/mm/dd/sessionId.jsonl",
   "outputFormat": "jsonl",
   "captureEvents": ["session_start", "message", "tool_call", "tool_result", "session_end", "error"],
@@ -51,9 +102,11 @@ where
 
 ### Implementation suggestions / specifics
 
-- Load config in Pi startup, before the model session begins.
+- Load config in Pi startup before the agent loop begins.
+- Merge user overrides onto the built-in defaults.
 - Keep the archive config outside the prompt path.
-- Use a fail-closed policy: if archiving is enabled, no archive means no session.
+- Create the archive directory recursively if it does not exist.
+- Use fail-closed behavior for startup wiring, not for missing user overrides.
 - Keep `jsonl` as the first and only archive format.
 - Treat `repoPath` as a separate session archive repository, not the Pi code repo.
 
@@ -173,7 +226,7 @@ It must be append-only and flush often enough that a crash does not destroy the 
 
 ```text
 PiArchiveWriter
-  config: SessionArchiveConfig
+  config: ResolvedSessionArchiveConfig
   envelope: PiSessionEnvelope
   filePath: seq CHAR
   appendOnly: 𝔹
@@ -186,7 +239,7 @@ where
 
 ```json
 {
-  "filePath": "/home/easter/session-archive-repo/2026/06/05/2026-06-05T19-45-12Z_8f3a.jsonl",
+  "filePath": "/home/easter/.pi/agent/session-archive/2026/06/05/2026-06-05T19-45-12Z_8f3a.jsonl",
   "appendOnly": true,
   "flushed": true
 }
@@ -199,6 +252,7 @@ where
 - Open the file in append mode only.
 - Flush after each event or very small batch.
 - Never rewrite old records in place.
+- Create the archive directory recursively before the first write.
 - Keep archive storage separate from the Pi source tree.
 
 ---
@@ -245,11 +299,11 @@ where
 - Load the archive plugin before the agent loop starts.
 - Register hooks for input, tool calls, tool results, output, and shutdown.
 - Validate records before they reach the writer.
-- Fail startup if archiving is enabled but unavailable.
+- Fail startup if archive wiring is enabled but unavailable.
 - Keep all archive decisions in Pi runtime code, not in prompts or model output.
 
 ---
 
 ## Suggested first milestone
 
-Pi can start a session, create a timestamped session archive file, log `session_start`, append every input and tool/output event as JSONL, and close with `session_end` without the model deciding anything about archiving.
+Pi can start a session with default archive settings, create the archive directory automatically if needed, create a timestamped session archive file, log `session_start`, append every input and tool/output event as JSONL, and close with `session_end` without the model deciding anything about archiving.

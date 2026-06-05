@@ -10,27 +10,29 @@ The feature must be enforced by Pi runtime code, not by LLM prompting.
 
 ## Plan by spec component
 
-### 1. `SessionArchiveConfig`
+### 1. `SessionArchiveDefaults` and `SessionArchiveConfig`
 
 **Build target**
 - startup config loader
+- default resolution
 - strict validation
 - fail-closed boot behavior
 
 **Implementation steps**
-- Add a small archive config format, JSON first.
-- Load config before the Pi agent loop starts.
-- Validate required keys:
+- Add a built-in archive config with sensible defaults.
+- Load user overrides before the Pi agent loop starts.
+- Merge overrides onto defaults.
+- Validate resolved keys:
   - `enabled`
   - `repoPath`
   - `fileLayout`
   - `outputFormat=jsonl`
   - `failClosed=true`
-- Allow env-var overrides only for sensitive paths if needed.
-- Refuse to start if archiving is enabled but config is missing or invalid.
+- Create the archive directory recursively if it does not exist.
+- Refuse to start if archiving is enabled but the resolved config is invalid.
 
 **Done when**
-- Pi will not start a session without a valid archive config when archiving is enabled.
+- Pi can start with defaults only, but still refuses malformed resolved config.
 
 ---
 
@@ -86,6 +88,7 @@ The feature must be enforced by Pi runtime code, not by LLM prompting.
 - Flush after every write or tiny batch.
 - Append `session_end` on clean shutdown.
 - Do not create any update or rewrite path.
+- Create parent directories recursively before the first write.
 
 **Done when**
 - the archive survives crashes with minimal loss.
@@ -115,7 +118,7 @@ The feature must be enforced by Pi runtime code, not by LLM prompting.
 ### Runtime layers
 
 1. **CLI/bootstrap layer**
-   - loads archive config
+   - loads archive defaults and user overrides
    - creates the session envelope
    - installs hooks before the model loop starts
 
@@ -141,7 +144,8 @@ The feature must be enforced by Pi runtime code, not by LLM prompting.
 ## Suggested build order
 
 ### Phase 1 — config + envelope
-- archive config loader
+- archive defaults
+- config merge/resolution
 - session ID generation
 - startup validation
 - session_start event
@@ -167,7 +171,7 @@ The feature must be enforced by Pi runtime code, not by LLM prompting.
 
 ## Recommended first milestone
 
-Pi starts a session, creates a session archive file, logs every inbound and outbound event, and closes with `session_end` while the archive remains entirely outside the LLM path.
+Pi starts a session with default archive settings, creates the archive directory automatically if needed, creates a session archive file, logs every inbound and outbound event, and closes with `session_end` while the archive remains entirely outside the LLM path.
 
 ---
 
