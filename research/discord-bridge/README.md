@@ -1,18 +1,76 @@
 # Discord Bridge Prototype
 
-Prototype Go service for the Discord bridge described in this directory.
+Prototype Go service for a Discord-first bridge and operator control plane.
 
-## What it does
+It sits between Discord and Pi-backed local agents, owns channel bindings and reactions, and provides a local web UI plus HTTP API for bridge-managed agent operation.
 
-- connects to Discord via bot token
-- keeps local chat and attachment logs
-- lets one agent bind to one Discord channel
-- can auto-assign a channel when the agent joins without one
-- queues inbound events for the bound agent
-- adds bridge-owned reactions for ack / progress / final state
-- exposes a small HTTP dashboard plus local API for join, poll, status updates, completion, and launching new `agent-rpc --bridge` processes
+## Current status
 
-## Run
+This prototype currently supports:
+
+- one bridge process connected to one Discord bot
+- bridge-owned ack / progress / completion reactions
+- local chat + attachment logging
+- one active agent binding per channel
+- bridge-managed Pi-backed agent clients via `agent-rpc --bridge`
+- a server-rendered Go web UI with HTMX partial refreshes
+- optional auto-start of one Pi bridge client per enabled Discord room
+- persistent local runtime state under `~/.pi/discord-bridge`
+- user-level `systemd` supervision for the bridge itself
+
+## Architecture
+
+### Bridge
+
+The bridge process owns:
+
+- Discord connectivity
+- inbound message normalization
+- outbound delivery
+- reaction updates
+- channel binding state
+- managed-agent records
+- local logs / audit trail
+- the operator web UI
+
+### Agent clients
+
+Each managed room agent is a child process that runs:
+
+```bash
+go run ./cmd/agent-rpc --bridge
+```
+
+from the `research/agent-rpc` Go module, or an equivalent `agent-rpc --bridge` binary invocation.
+
+The bridge remains the control plane. Pi RPC remains the agent-side upstream path.
+
+## Runtime layout
+
+Local runtime state lives under:
+
+```bash
+~/.pi/discord-bridge/
+```
+
+Important paths:
+
+- `~/.pi/discord-bridge/bridge.env`
+  - local env file used by the bridge service
+- `~/.pi/discord-bridge/state.json`
+  - persisted bridge state
+- `~/.pi/discord-bridge/audit.jsonl`
+  - append-only audit log
+- `~/.pi/discord-bridge/logs/`
+  - bridge-owned chat logs
+- `~/.pi/discord-bridge/downloads/`
+  - saved attachments
+- `~/.pi/discord-bridge/launched-agents/`
+  - per-agent runtime dirs, logs, and Pi session material
+
+## Running the bridge directly
+
+For ad hoc local runs:
 
 ```bash
 cd research/discord-bridge
@@ -25,7 +83,7 @@ Required env:
 export DISCORD_BOT_TOKEN=...
 ```
 
-Optional env:
+Useful optional env:
 
 ```bash
 export DISCORD_BRIDGE_PORT=19444
@@ -33,39 +91,130 @@ export DISCORD_BRIDGE_HOST=127.0.0.1
 export DISCORD_BRIDGE_STORAGE_ROOT=~/.pi/discord-bridge
 export DISCORD_BRIDGE_ID=discord-bridge-main
 export DISCORD_BRIDGE_DRY_RUN=false
-# optional explicit auto-assignment list
 export DISCORD_BRIDGE_DEFAULT_GUILD_ID=1478102509330497721
 export DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS=1504560627325079642,1488999734944202802
-# optional: auto-create and auto-start one Pi bridge client per enabled room
 export DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true
 export DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX=room
 ```
 
-If the explicit auto-assignment env vars are omitted, the bridge will try to infer assignable Discord channels from `~/.openclaw/openclaw.json`.
+If explicit channel settings are omitted, the bridge will infer enabled assignable Discord rooms from:
 
-If `DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true`, the bridge will synthesize one managed agent per enabled assignable Discord channel and auto-launch a Pi-backed bridge client for each room. The generated agent ids default to `<prefix>-<channelId>` where the prefix comes from `DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX`.
+```bash
+~/.openclaw/openclaw.json
+```
 
-## Dashboard
+## Running the bridge as a user service
 
-The dashboard includes a simple **Launch Agent** control that can start a new `agent-rpc --bridge` process and bind it to a Discord channel. By default it launches `go run ./cmd/agent-rpc --bridge` from the `research/agent-rpc` module directory when available, and falls back to `agent-rpc --bridge` otherwise. It shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a harness log preview panel so you can inspect agent-side issues directly from the UI.
+The bridge is now set up to run under `systemd --user`.
 
+Unit file:
 
-Open:
+```bash
+~/.config/systemd/user/discord-bridge.service
+```
+
+Local env file:
+
+```bash
+~/.pi/discord-bridge/bridge.env
+```
+
+Useful commands:
+
+```bash
+systemctl --user status discord-bridge
+systemctl --user restart discord-bridge
+journalctl --user -u discord-bridge -n 100 --no-pager
+```
+
+Because `linger` is enabled, this user service can stay up across logout.
+
+## Web UI
+
+The bridge UI is a conventional server-rendered Go web app with HTMX partial refreshes.
+
+Primary views:
+
+- Overview
+- Managed Agents
+- Bindings
+- Activity
+- Managed Agent Detail
+
+The UI is intended to show:
+
+- bridge health
+- Discord connection state
+- managed-agent lifecycle state
+- channel ownership/bindings
+- queue/work state
+- recent operational activity
+
+Debug logs are secondary detail, not the homepage.
+
+### Opening the UI
+
+If the bridge is bound locally only:
 
 ```bash
 http://127.0.0.1:19444/
 ```
 
-To expose it on your VPN/Tailscale, bind the service to a VPN-reachable host/IP, for example:
+If the bridge is bound for remote access, use your host/VPN/Tailscale IP:
 
 ```bash
-export DISCORD_BRIDGE_HOST=0.0.0.0
-# or your Tailscale/VPN IP
+http://<host-or-vpn-ip>:19444/
 ```
 
-Then open `http://<vpn-host>:19444/` from another machine on the VPN.
+The current local deployment is configured to bind on all interfaces via:
 
-## Local API
+```bash
+DISCORD_BRIDGE_HOST=0.0.0.0
+```
+
+## Auto-start one agent per enabled room
+
+If enabled:
+
+```bash
+DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true
+```
+
+the bridge will:
+
+1. read the enabled assignable Discord rooms
+2. create one managed-agent record per room
+3. synthesize agent ids like:
+
+```text
+room-<channelId>
+```
+
+4. auto-launch a Pi-backed bridge client for each room
+
+The prefix is configurable via:
+
+```bash
+DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX=room
+```
+
+This is useful when you want the bridge to automatically stand up one always-on Pi agent per enabled Discord chat room.
+
+## Manual agent launching
+
+The UI also supports manually creating or editing managed agents and starting/stopping/restarting them.
+
+By default, the bridge launches Pi-backed clients using:
+
+```bash
+go run ./cmd/agent-rpc --bridge
+```
+
+from the `research/agent-rpc` module directory when available, and otherwise falls back to an `agent-rpc --bridge` executable if present in `PATH`.
+
+## Local HTTP API
+
+Bridge/control endpoints currently include:
 
 - `GET /status`
 - `POST /join`
@@ -73,7 +222,65 @@ Then open `http://<vpn-host>:19444/` from another machine on the VPN.
 - `POST /agents/{agentId}/status`
 - `POST /agents/{agentId}/complete`
 
-Start with the research docs in this directory:
+UI endpoints currently include:
+
+- `GET /`
+- `GET /managed-agents`
+- `GET /managed-agents/{agentId}`
+- `GET /bindings`
+- `GET /activity`
+
+HTMX partial routes currently include:
+
+- `GET /partials/overview`
+- `GET /partials/managed-agents-table`
+- `GET /partials/bindings-table`
+- `GET /partials/activity-feed`
+
+Managed-agent actions currently include:
+
+- `POST /managed-agents`
+- `POST /managed-agents/{agentId}/start`
+- `POST /managed-agents/{agentId}/stop`
+- `POST /managed-agents/{agentId}/restart`
+
+## Notes on secrets
+
+Do not commit Discord bot credentials into the repo.
+
+Use a local env file such as:
+
+```bash
+~/.pi/discord-bridge/bridge.env
+```
+
+or another local secret source.
+
+A typical local `bridge.env` may include:
+
+```bash
+PATH=/home/easter/.pi/agent/bin:/home/easter/.local/bin:/home/easter/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+DISCORD_BRIDGE_HOST=0.0.0.0
+DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true
+DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX=room
+DISCORD_BOT_TOKEN=...
+```
+
+## Known prototype limitations
+
+This is still a research/prototype project.
+
+Notable current limitations:
+
+- managed-agent lifecycle is improved but not yet a full supervisor/reconciler
+- room autostart is bridge-driven but still prototype-grade
+- state/history migration is minimal
+- the UI is much better than the old debug dashboard, but still evolving
+- a production-grade reconciliation / restart-policy model is still future work
+
+## Related docs in this directory
+
+Start with:
 
 - `SCOPE.md`
 - `SPEC.md`
