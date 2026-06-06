@@ -30,6 +30,7 @@ The implementation must be enforced by runtime code, not by prompt text.
 - no log-scraping dependency for normal success
 - readable structure that makes session continuity and event flow obvious
 - the smallest coherent vertical slice that proves the architecture
+- a durable implementation language choice for a long-lived harness process
 
 ## Where to build it
 
@@ -44,6 +45,27 @@ That directory should be the working home for:
 - test fixtures or logs if needed
 
 If the code later graduates into a package or core integration, keep the prototype source tree here first.
+
+## Language preference
+
+Prefer building this prototype in **Go**.
+
+Why Go is a good fit here:
+
+- strong fit for a long-lived harness/supervisor process
+- straightforward subprocess management for launching Pi
+- simple JSONL framing over stdin/stdout
+- easy stateful REPL or one-shot CLI implementation
+- easy future expansion into a daemon, service, or network bridge
+- low deployment friction via static binaries
+
+For this prototype, the preferred split is:
+
+- harness process: Go
+- simple local CLI: Go
+- upstream agent: Pi as an external subprocess launched with `--mode rpc`
+
+If another language turns out materially cleaner during implementation, use judgment, but Go is the default preference.
 
 ## Where to look first in the codebase
 
@@ -89,19 +111,37 @@ This is a suggested shape, not a prescription.
 
 The concrete implementation will likely want something like this shape:
 
-```ts
-const harness = await createHarness({
-  command: "pi",
-  args: ["--mode", "rpc"],
-  cwd: process.cwd(),
-});
+```go
+type HarnessConfig struct {
+    Command string
+    Args    []string
+    Cwd     string
+}
 
-await harness.start();
-const state = await harness.getState();
-console.log("session:", state.sessionId, state.sessionFile);
+h, err := NewHarness(HarnessConfig{
+    Command: "pi",
+    Args:    []string{"--mode", "rpc"},
+    Cwd:     ".",
+})
+if err != nil {
+    log.Fatal(err)
+}
 
-const result = await harness.prompt("List files in the current directory");
-console.log(result.text);
+if err := h.Start(); err != nil {
+    log.Fatal(err)
+}
+
+state, err := h.GetState()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("session:", state.SessionID, state.SessionFile)
+
+result, err := h.Prompt("List files in the current directory")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.Text)
 ```
 
 A richer internal design is fine if it makes the event flow clearer. The important thing is to keep the first working slice small and coherent.
@@ -155,5 +195,6 @@ Do not add these in the first implementation:
 - Read the docs first, especially `packages/coding-agent/docs/rpc.md`.
 - Prefer the smallest coherent implementation that proves the architecture.
 - Use runtime code for behavior; do not rely on prompt conventions.
+- Prefer Go unless there is a strong implementation reason not to.
 - Keep room for future downstreams, but do not generalize prematurely.
 - If a clean first slice is one-shot CLI before REPL, that is acceptable.
