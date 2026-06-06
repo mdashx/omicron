@@ -1,44 +1,45 @@
-# Pi RPC Discord Harness Spec
+# Agent RPC Harness Spec
 
 ## Intent
 
-Add a Pi RPC harness that connects Pi to the existing Discord bridge without using PTY output scraping as the primary control or output path.
+Add a harness that sits between a single RPC-capable upstream agent process and a single simple local CLI downstream consumer.
 
-The harness should launch Pi in `--mode rpc`, maintain session continuity, consume Pi's structured RPC events, and project status and final replies through the Discord bridge.
+The harness should launch the upstream agent through its native RPC interface, maintain session continuity, consume structured RPC events, and project useful status and final replies to the CLI.
 
-Pi RPC must be the only upstream agent interface for this feature.
+This spec intentionally describes the architecture at a conceptual level rather than binding it to a named upstream product or a named downstream transport.
 
-The Discord bridge must be the only downstream output target for this feature.
+The narrowed scope still applies:
+
+- one upstream RPC agent only
+- one simple local CLI downstream only
 
 This must be enforced by harness runtime wiring, not by prompting the model to remember transport rules.
 
 ---
 
-## 1. `PiRpcHarness`
+## 1. `AgentRpcHarness`
 
 ### Prose Spec
 
 The harness is a long-lived local supervisor process.
 
-It launches Pi in RPC mode, owns the Pi process lifecycle, tracks Pi session state, and mediates all communication between Pi and the Discord bridge.
+It launches the upstream agent in RPC mode, owns the agent process lifecycle, tracks session state, and mediates all communication between the upstream RPC interface and the downstream CLI.
 
 ### Z Spec
 
 ```text
-PiRpcHarness
+AgentRpcHarness
   enabled: 𝔹
-  bridgeUrl: seq CHAR
   agentId: seq CHAR
   cwd: seq CHAR
   upstream: seq CHAR
   downstream: seq CHAR
 where
   enabled = true
-  bridgeUrl ≠ ⟨⟩
   agentId ≠ ⟨⟩
   cwd ≠ ⟨⟩
-  upstream = "pi-rpc"
-  downstream = "discord-bridge"
+  upstream = "rpc-agent"
+  downstream = "simple-cli"
 ```
 
 ### Data examples
@@ -46,134 +47,79 @@ where
 ```json
 {
   "enabled": true,
-  "bridgeUrl": "http://127.0.0.1:19444",
   "agentId": "main",
   "cwd": "/home/easter/omicron",
-  "upstream": "pi-rpc",
-  "downstream": "discord-bridge"
+  "upstream": "rpc-agent",
+  "downstream": "simple-cli"
 }
 ```
 
 ### Implementation suggestions / specifics
 
 - Start as a local process or service.
-- Treat Pi RPC as the only supported upstream for the first implementation.
-- Treat the Discord bridge as the only supported downstream for the first implementation.
-- Keep transport ownership in harness code, not in the model prompt path.
+- Treat the upstream RPC interface as authoritative.
+- Treat the CLI as the only downstream consumer in the first implementation.
+- Keep transport ownership in harness code, not in the prompt path.
 
 ---
 
-## 2. `PiRpcHarnessConfig`
+## 2. `AgentRpcHarnessConfig`
 
 ### Prose Spec
 
 The harness should have built-in defaults and support config or environment overrides.
 
-It should resolve bridge connectivity, Pi launch arguments, working directory, and session persistence behavior.
+It should resolve upstream launch arguments, working directory, and session persistence behavior, plus basic CLI behavior.
 
 ### Z Spec
 
 ```text
-PiRpcHarnessConfig
+AgentRpcHarnessConfig
   enabled?: 𝔹
-  bridgeUrl?: seq CHAR
   agentId?: seq CHAR
-  credsRef?: seq CHAR
-  guildId?: seq CHAR
-  channelId?: seq CHAR
-  piCommand?: seq CHAR
-  piArgs?: seq CHAR
+  command?: seq CHAR
+  args?: seq CHAR
   cwd?: seq CHAR
   sessionDir?: seq CHAR
   noSession?: 𝔹
-  pollIntervalMs?: ℕ
   idleTimeoutMs?: ℕ
-where
-  piCommand = "pi" ∨ piCommand ≠ ⟨⟩
+  debug?: 𝔹
 ```
 
 ### Data examples
 
 ```json
 {
-  "bridgeUrl": "http://127.0.0.1:19444",
   "agentId": "main",
-  "credsRef": "local-session",
-  "guildId": "1478102509330497721",
-  "channelId": "1504560627325079642",
-  "piCommand": "pi",
-  "piArgs": ["--mode", "rpc"],
+  "command": "agent-command",
+  "args": ["--mode", "rpc"],
   "cwd": "/home/easter/omicron",
-  "pollIntervalMs": 1500,
-  "idleTimeoutMs": 2500
+  "idleTimeoutMs": 2500,
+  "debug": true
 }
 ```
 
 ### Implementation suggestions / specifics
 
-- Default Pi launch to `pi --mode rpc`.
-- Keep session persistence configurable through normal Pi flags.
-- Keep bridge config outside the prompt path.
-- Allow environment variable overrides for local development.
+- Default upstream launch to RPC mode.
+- Keep session persistence configurable through normal upstream flags.
+- Allow environment variable overrides for development.
+- Keep downstream CLI concerns minimal.
 
 ---
 
-## 3. `BridgeJoinSession`
+## 3. `UpstreamRpcProcess`
 
 ### Prose Spec
 
-The harness must explicitly join the Discord bridge as one logical agent before processing inbound Discord work.
+The harness launches the upstream agent as a subprocess in RPC mode and communicates with it over JSONL on stdin/stdout.
 
-The bridge join is a runtime fact owned by the harness, not by Pi.
+The upstream RPC channel is the authoritative control and event path.
 
 ### Z Spec
 
 ```text
-BridgeJoinSession
-  agentId: seq CHAR
-  credsRef: seq CHAR
-  guildId: seq CHAR
-  channelId: seq CHAR
-  joinedAt: seq CHAR
-where
-  agentId ≠ ⟨⟩
-  credsRef ≠ ⟨⟩
-  channelId ≠ ⟨⟩
-  joinedAt ≠ ⟨⟩
-```
-
-### Data examples
-
-```json
-{
-  "agentId": "main",
-  "credsRef": "local-session",
-  "guildId": "1478102509330497721",
-  "channelId": "1504560627325079642",
-  "joinedAt": "2026-06-06T05:30:00Z"
-}
-```
-
-### Implementation suggestions / specifics
-
-- Perform `POST /join` before sending any Pi prompt.
-- Rejoin idempotently on reconnect.
-- Refuse to process bridge events until the join succeeds.
-
----
-
-## 4. `PiRpcProcess`
-
-### Prose Spec
-
-The harness launches Pi as a subprocess in RPC mode and communicates with it over JSONL on stdin/stdout.
-
-Pi RPC is the authoritative upstream control and event channel.
-
-### Z Spec
-
-```text
-PiRpcProcess
+UpstreamRpcProcess
   pid: ℕ
   command: seq CHAR
   args: seq CHAR
@@ -190,7 +136,7 @@ where
 ```json
 {
   "pid": 44123,
-  "command": "pi",
+  "command": "agent-command",
   "args": ["--mode", "rpc"],
   "mode": "rpc",
   "alive": true
@@ -201,23 +147,23 @@ where
 
 - Use plain pipes for RPC stdin/stdout.
 - Use strict LF-delimited JSONL framing.
-- Treat RPC parse failure as a protocol/process error.
+- Treat parse failure as a protocol/process error.
 - Do not depend on PTY output for normal control flow.
 
 ---
 
-## 5. `PiRpcSessionState`
+## 4. `UpstreamSessionState`
 
 ### Prose Spec
 
-The harness should track Pi session state so it can preserve continuity across multiple Discord interactions.
+The harness should track upstream session state so it can preserve continuity across multiple downstream requests.
 
-The harness should treat Pi's reported session identifiers as authoritative.
+The harness should treat upstream-reported session identifiers as authoritative when they exist.
 
 ### Z Spec
 
 ```text
-PiRpcSessionState
+UpstreamSessionState
   agentId: seq CHAR
   cwd: seq CHAR
   sessionId?: seq CHAR
@@ -238,8 +184,8 @@ where
   "agentId": "main",
   "cwd": "/home/easter/omicron",
   "sessionId": "019ea1f0-1234-7890-abcd-ef1234567890",
-  "sessionFile": "/home/easter/.pi/agent/sessions/--home-easter-omicron--/2026-06-06T05-31-02-111Z_019ea1f0-1234-7890-abcd-ef1234567890.jsonl",
-  "sessionName": "discord main",
+  "sessionFile": "/tmp/session.jsonl",
+  "sessionName": "main session",
   "isStreaming": false,
   "startedAt": "2026-06-06T05:31:02Z"
 }
@@ -247,68 +193,30 @@ where
 
 ### Implementation suggestions / specifics
 
-- Read Pi state through `get_state`.
+- Read upstream state from the RPC interface where possible.
 - Preserve `sessionId` and `sessionFile` for logging and continuity.
-- Reuse one Pi session for a bound Discord agent unless explicitly reset.
+- Reuse one upstream session for a single downstream conversation unless explicitly reset.
 
 ---
 
-## 6. `BridgeEventPollLoop`
+## 5. `DownstreamCliRequest`
 
 ### Prose Spec
 
-The harness polls the Discord bridge for inbound work assigned to its bound agent id.
-
-Each inbound event becomes harness-owned work that is then translated into Pi RPC commands.
-
-### Z Spec
-
-```text
-BridgeEventPollLoop
-  agentId: seq CHAR
-  pollIntervalMs: ℕ
-  queueDepth: ℕ
-where
-  agentId ≠ ⟨⟩
-  pollIntervalMs > 0
-```
-
-### Data examples
-
-```json
-{
-  "agentId": "main",
-  "pollIntervalMs": 1500,
-  "queueDepth": 2
-}
-```
-
-### Implementation suggestions / specifics
-
-- Poll `GET /agents/{agentId}/events`.
-- Deduplicate as needed on the harness side.
-- Keep bridge event handling outside Pi prompts.
-
----
-
-## 7. `DiscordToPiRpcMapping`
-
-### Prose Spec
-
-The harness maps Discord-originated work into Pi RPC commands.
+The harness accepts simple local CLI-originated requests and maps them to upstream RPC commands.
 
 The mapping is owned by the harness and must be deterministic.
 
 ### Z Spec
 
 ```text
-DiscordToPiRpcMapping
-  eventId: seq CHAR
+DownstreamCliRequest
+  requestId: seq CHAR
   command: seq CHAR
   message: seq CHAR
   streamingBehavior?: seq CHAR
 where
-  eventId ≠ ⟨⟩
+  requestId ≠ ⟨⟩
   command ∈ {"prompt", "steer", "follow_up", "abort"}
   message ≠ ⟨⟩ ∨ command = "abort"
 ```
@@ -317,9 +225,9 @@ where
 
 ```json
 {
-  "eventId": "evt_123",
+  "requestId": "req_123",
   "command": "prompt",
-  "message": "[discord-bridge]\nAuthor: easter\nMessage: summarize the latest log"
+  "message": "summarize the latest log"
 }
 ```
 
@@ -327,29 +235,29 @@ where
 
 - Default idle inbound work to `prompt`.
 - Default busy inbound work to `steer` for the first implementation.
-- Keep injected prompt formatting stable and minimal.
-- Make bridge origin explicit in the message wrapper.
+- Keep request formatting stable and minimal.
+- Preserve a request id for completion matching and logging.
 
 ---
 
-## 8. `PiRpcEventProjection`
+## 6. `UpstreamRpcEventProjection`
 
 ### Prose Spec
 
-The harness consumes Pi RPC events and projects them into a smaller internal event model suitable for downstream bridge behavior.
+The harness consumes upstream RPC events and projects them into a smaller internal event model suitable for downstream CLI behavior.
 
-Pi RPC is the authoritative source for assistant output, queue state, tool lifecycle, and thinking visibility.
+The upstream RPC stream is the authoritative source for assistant output, queue state, tool lifecycle, and thinking visibility.
 
 ### Z Spec
 
 ```text
-PiRpcEventProjection
+UpstreamRpcEventProjection
   source: seq CHAR
   mappedType: seq CHAR
   timestamp: seq CHAR
   payload: seq CHAR
 where
-  source = "pi-rpc"
+  source = "rpc-agent"
   mappedType ≠ ⟨⟩
   timestamp ≠ ⟨⟩
 ```
@@ -358,7 +266,7 @@ where
 
 ```json
 {
-  "source": "pi-rpc",
+  "source": "rpc-agent",
   "mappedType": "assistant_message_complete",
   "timestamp": "2026-06-06T05:31:30Z",
   "payload": "{\"text\":\"Here is the summary.\"}"
@@ -367,119 +275,110 @@ where
 
 ### Implementation suggestions / specifics
 
-- Map Pi events such as:
-  - `agent_start`
-  - `agent_end`
-  - `message_update`
-  - `message_end`
-  - `tool_execution_start`
-  - `tool_execution_end`
-  - `queue_update`
+- Map upstream events such as:
+  - agent lifecycle
+  - message streaming lifecycle
+  - tool execution lifecycle
+  - queue updates
 - Preserve an unknown-event fallback instead of failing hard.
-- Treat Pi RPC, not logs or PTY, as authoritative for normal flow.
+- Treat RPC, not logs or PTY, as authoritative for normal flow.
 
 ---
 
-## 9. `BridgeStatusProjection`
+## 7. `CliStatusProjection`
 
 ### Prose Spec
 
-While Pi is working, the harness reports progress back to the Discord bridge so the bridge can update reactions and status indicators.
+While the upstream agent is working, the harness projects simple status information to the downstream CLI.
 
 The harness is the status publisher.
 
 ### Z Spec
 
 ```text
-BridgeStatusProjection
-  agentId: seq CHAR
-  messageId: seq CHAR
-  reaction: seq CHAR
+CliStatusProjection
+  requestId: seq CHAR
   phase: seq CHAR
+  message: seq CHAR
 where
-  agentId ≠ ⟨⟩
-  messageId ≠ ⟨⟩
-  reaction ≠ ⟨⟩
+  requestId ≠ ⟨⟩
+  phase ≠ ⟨⟩
 ```
 
 ### Data examples
 
 ```json
 {
-  "agentId": "main",
-  "messageId": "discord_msg_1",
-  "reaction": "💭",
-  "phase": "thinking"
+  "requestId": "req_123",
+  "phase": "thinking",
+  "message": "working"
 }
 ```
 
 ### Implementation suggestions / specifics
 
 - Publish started/in-progress/completed/error transitions.
-- Use bridge-approved reactions only.
-- Keep status updates deterministic and separate from model prose.
+- Keep status messages deterministic and separate from model prose.
+- Keep CLI output minimal for the first implementation.
 
 ---
 
-## 10. `BridgeCompletionDelivery`
+## 8. `CliCompletionDelivery`
 
 ### Prose Spec
 
-When Pi finishes a bridge-originated turn, the harness sends the final response back through the Discord bridge.
+When the upstream agent finishes a downstream-originated turn, the harness sends the final response back to the CLI.
 
-Pi RPC-derived assistant output is the authoritative completion source.
+RPC-derived assistant output is the authoritative completion source.
 
 ### Z Spec
 
 ```text
-BridgeCompletionDelivery
-  agentId: seq CHAR
-  messageId: seq CHAR
+CliCompletionDelivery
+  requestId: seq CHAR
   content: seq CHAR
-  finalReaction?: seq CHAR
+  completedAt: seq CHAR
 where
-  agentId ≠ ⟨⟩
-  messageId ≠ ⟨⟩
+  requestId ≠ ⟨⟩
+  completedAt ≠ ⟨⟩
 ```
 
 ### Data examples
 
 ```json
 {
-  "agentId": "main",
-  "messageId": "discord_msg_1",
+  "requestId": "req_123",
   "content": "Here is the summary.",
-  "finalReaction": "✅"
+  "completedAt": "2026-06-06T05:31:30Z"
 }
 ```
 
 ### Implementation suggestions / specifics
 
-- Use `POST /agents/{agentId}/complete`.
-- Send completion only once per bridge event.
-- Prefer the final assistant text from Pi RPC state/events.
-- Use a fallback reply only if Pi completes without extractable final text.
+- Send completion only once per request.
+- Prefer the final assistant text from upstream RPC state/events.
+- Use a fallback reply only if the upstream finishes without extractable final text.
 
 ---
 
-## 11. `PiThinkingCapture`
+## 9. `ThinkingCapture`
 
 ### Prose Spec
 
-The harness should capture Pi thinking events when the provider/model exposes them.
+The harness should capture thinking events when the upstream provider/model exposes them.
 
-Thinking capture is internal observability by default and need not be shown to Discord users in the first implementation.
+Thinking capture is internal observability by default and need not be shown to CLI users in the first implementation.
 
 ### Z Spec
 
 ```text
-PiThinkingCapture
+ThinkingCapture
   visibleToHarness: 𝔹
-  visibleToDiscord: 𝔹
+  visibleToCli: 𝔹
   source: seq CHAR
 where
   visibleToHarness = true
-  source = "pi-rpc"
+  source = "rpc-agent"
 ```
 
 ### Data examples
@@ -487,38 +386,38 @@ where
 ```json
 {
   "visibleToHarness": true,
-  "visibleToDiscord": false,
-  "source": "pi-rpc"
+  "visibleToCli": false,
+  "source": "rpc-agent"
 }
 ```
 
 ### Implementation suggestions / specifics
 
-- Ingest `thinking_start`, `thinking_delta`, and `thinking_end` when present.
+- Ingest thinking lifecycle events when present.
 - Do not assume every provider/model exposes visible thinking.
 - Keep internal logs or event trails for future use.
 
 ---
 
-## 12. `PiToolLifecycleCapture`
+## 10. `ToolLifecycleCapture`
 
 ### Prose Spec
 
-The harness should capture Pi tool execution lifecycle events for observability and debugging.
+The harness should capture tool execution lifecycle events for observability and debugging.
 
-Tool execution should not be sent to Discord users by default in the first implementation.
+Tool execution should not be sent to CLI users by default in the first implementation.
 
 ### Z Spec
 
 ```text
-PiToolLifecycleCapture
+ToolLifecycleCapture
   visibleToHarness: 𝔹
-  visibleToDiscord: 𝔹
+  visibleToCli: 𝔹
   source: seq CHAR
 where
   visibleToHarness = true
-  visibleToDiscord = false
-  source = "pi-rpc"
+  visibleToCli = false
+  source = "rpc-agent"
 ```
 
 ### Data examples
@@ -526,23 +425,20 @@ where
 ```json
 {
   "visibleToHarness": true,
-  "visibleToDiscord": false,
-  "source": "pi-rpc"
+  "visibleToCli": false,
+  "source": "rpc-agent"
 }
 ```
 
 ### Implementation suggestions / specifics
 
-- Capture:
-  - `tool_execution_start`
-  - `tool_execution_update`
-  - `tool_execution_end`
+- Capture tool execution start, update, and end.
 - Use these for internal state, debugging, and future UI work.
-- Keep bridge output minimal for the first implementation.
+- Keep CLI output minimal for the first implementation.
 
 ---
 
-## 13. `HarnessAuditState`
+## 11. `HarnessAuditState`
 
 ### Prose Spec
 
@@ -552,82 +448,76 @@ The harness should keep enough local state to avoid duplicate replies and to deb
 
 ```text
 HarnessAuditState
-  processedEventIds: ℙ seq CHAR
-  activeMessageId?: seq CHAR
-  lastJoinAt?: seq CHAR
-  piAlive: 𝔹
+  processedRequestIds: ℙ seq CHAR
+  activeRequestId?: seq CHAR
+  upstreamAlive: 𝔹
   sessionId?: seq CHAR
 where
-  piAlive ∈ {true, false}
+  upstreamAlive ∈ {true, false}
 ```
 
 ### Data examples
 
 ```json
 {
-  "processedEventIds": ["evt_123", "evt_124"],
-  "activeMessageId": "discord_msg_1",
-  "lastJoinAt": "2026-06-06T05:30:00Z",
-  "piAlive": true,
+  "processedRequestIds": ["req_123", "req_124"],
+  "activeRequestId": "req_123",
+  "upstreamAlive": true,
   "sessionId": "019ea1f0-1234-7890-abcd-ef1234567890"
 }
 ```
 
 ### Implementation suggestions / specifics
 
-- Persist processed bridge event ids locally.
-- Record Pi `sessionId` and `sessionFile` when available.
+- Persist processed request ids locally if needed.
+- Record session identifiers when available.
 - Log raw RPC lines on parse failure.
-- Distinguish bridge state from Pi session state.
+- Distinguish downstream request state from upstream session state.
 
 ---
 
-## 14. `PiRpcDiscordHarnessInvariants`
+## 12. `AgentRpcHarnessInvariants`
 
 ### Prose Spec
 
-- The harness joins the Discord bridge before handling Discord work.
-- Pi is launched only through `--mode rpc`.
-- Pi RPC is the authoritative upstream control and event path.
-- The Discord bridge is the only downstream output target.
-- Session continuity is preserved through Pi session state when enabled.
-- Thinking and tool events are captured internally even if not shown to Discord users.
-- Duplicate completion should be prevented by harness and bridge state.
+- The upstream agent is launched only through its RPC interface.
+- The RPC interface is the authoritative upstream control and event path.
+- The simple local CLI is the only downstream output target.
+- Session continuity is preserved through upstream session state when enabled.
+- Thinking and tool events are captured internally even if not shown to CLI users.
+- Duplicate completion should be prevented by harness state.
 - Session logs and PTY output may exist for debugging or fallback, but they are not the primary architecture.
 
 ### Z Spec
 
 ```text
-PiRpcDiscordHarnessInvariants
-  bridgeFirst: 𝔹
+AgentRpcHarnessInvariants
   rpcRequired: 𝔹
-  piOnlyUpstream: 𝔹
-  discordOnlyDownstream: 𝔹
+  singleUpstream: 𝔹
+  singleDownstream: 𝔹
 where
-  bridgeFirst = true
   rpcRequired = true
-  piOnlyUpstream = true
-  discordOnlyDownstream = true
+  singleUpstream = true
+  singleDownstream = true
 ```
 
 ---
 
 ## Summary
 
-This design makes Pi RPC the single high-trust upstream and the Discord bridge the single downstream transport.
+This design makes one RPC-capable agent process the single high-trust upstream and one simple local CLI the single downstream transport.
 
 The harness owns:
 
-- Pi RPC process lifecycle
-- bridge join and polling
-- Pi session continuity
-- deterministic Discord-to-Pi command mapping
+- upstream RPC process lifecycle
+- session continuity
+- deterministic request mapping
 - status projection
 - final completion delivery
 - internal thinking/tool observability
 
-Pi provides the agent semantics.
+The upstream agent provides the agent semantics.
 
-The Discord bridge provides the user-facing transport.
+The downstream CLI provides the user-facing interaction surface.
 
 The harness is the stable control layer between them.

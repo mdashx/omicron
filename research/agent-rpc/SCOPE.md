@@ -7,7 +7,7 @@ This document intentionally narrows the project to a single upstream agent inter
 In scope:
 
 - upstream: `Pi` via `pi --mode rpc`
-- downstream: our existing Discord bridge
+- downstream: a very simple local CLI tool on the other end of the harness
 
 Out of scope for the initial implementation:
 
@@ -15,14 +15,14 @@ Out of scope for the initial implementation:
 - Codex integration
 - session-log tailing as a primary path
 - PTY parsing as a primary path
-- web UI, Slack, or other transports
+- Discord, Slack, web UI, or other transports
 - generic multi-agent abstraction beyond what is needed for Pi RPC
 
 ## Goal
 
-Build a harness component that launches Pi in RPC mode, maintains session continuity, consumes Pi’s structured events, and relays useful status and completions through the Discord bridge.
+Build a harness component that launches Pi in RPC mode, maintains session continuity, consumes Pi’s structured events, and relays useful status and completions to a very simple local CLI tool.
 
-The resulting system should let Discord act as the user-facing transport while Pi RPC remains the only agent backend.
+The resulting system should let a local CLI act as the user-facing transport while Pi RPC remains the only agent backend.
 
 ## Why this scope
 
@@ -37,18 +37,18 @@ It gives us:
 - tool execution visibility
 - thinking visibility when the provider exposes it
 
-By focusing only on Pi RPC and the Discord bridge first, we can validate the harness architecture without getting distracted by multiple upstreams or multiple outputs.
+By focusing only on Pi RPC and a very simple local CLI first, we can validate the harness architecture without getting distracted by multiple upstreams or multiple outputs.
 
 ## Primary use case
 
-1. A Discord message arrives through the bridge.
+1. A local CLI user sends a message to the harness.
 2. The harness converts that message into a Pi RPC `prompt`, `steer`, or `follow_up` request.
 3. Pi emits structured events over RPC stdout.
-4. The harness normalizes the events into a smaller bridge-facing model.
-5. The Discord bridge uses those events to:
-   - update status reactions
-   - send final replies
-   - optionally stream intermediary status in the future
+4. The harness normalizes the events into a smaller CLI-facing model.
+5. The CLI displays:
+   - simple progress or state updates
+   - the final reply
+   - optionally richer streamed output later
 
 ## Architecture
 
@@ -74,7 +74,7 @@ Responsible for:
   - `sessionFile`
   - `sessionName`
   - `cwd`
-- mapping Discord inbound work to Pi RPC calls
+- mapping CLI inbound work to Pi RPC calls
 - deciding when to use:
   - `prompt`
   - `steer`
@@ -83,7 +83,7 @@ Responsible for:
 
 ### 3. `PiEventMapper`
 
-Responsible for translating Pi RPC events into a smaller internal event model suitable for the Discord bridge.
+Responsible for translating Pi RPC events into a smaller internal event model suitable for the CLI tool.
 
 Suggested mapped events:
 
@@ -99,15 +99,15 @@ Suggested mapped events:
 - `agent_complete`
 - `error`
 
-### 4. `DiscordBridgeAdapter`
+### 4. `CliAdapter`
 
-Responsible for integrating the mapped Pi events with the existing Discord bridge behavior.
+Responsible for integrating the mapped Pi events with a very simple local CLI behavior.
 
 Initial responsibilities:
 
-- set working/in-progress reaction when Pi starts work
-- clear/update reaction when Pi completes
-- send exactly one completion message back through the bridge for each inbound Discord task
+- print simple working/in-progress state when Pi starts work
+- print final completion output when Pi completes
+- send exactly one completion output back to the CLI for each inbound CLI request
 - log enough metadata for debugging session continuity
 
 ## Source of truth
@@ -134,18 +134,18 @@ Required tracked state:
 - `pi sessionFile`
 - `startedAt`
 - `isStreaming`
-- `pending Discord message id`
+- `pending request id`
 
 Session rules:
 
-- one harness-controlled Pi RPC process per active agent binding
+- one harness-controlled Pi RPC process per active harness instance
 - one active Pi session per agent process unless explicitly reset
-- reuse the same Pi session for continuing conversation in the same Discord-bound agent
+- reuse the same Pi session for continuing conversation in the same CLI-driven session
 - allow future extension for explicit new-session/reset behavior, but do not require it for v1
 
 ## Messaging model
 
-Map Discord bridge work onto Pi RPC like this.
+Map CLI work onto Pi RPC like this.
 
 ### Default
 
@@ -158,40 +158,40 @@ Choose one initial policy and keep it simple.
 
 Recommended v1 policy:
 
-- if new inbound Discord work arrives while Pi is busy, send it as `steer`
+- if new inbound CLI work arrives while Pi is busy, send it as `steer`
 
 Possible future expansion:
 
-- allow bridge-level choice between `steer` and `follow_up`
+- allow CLI-level choice between `steer` and `follow_up`
 
 ## Status model
 
-Initial Discord bridge output should remain minimal.
+Initial CLI output should remain minimal.
 
-### v1 reactions
+### v1 status lines
 
-- when Pi starts processing: set in-progress reaction
-- when Pi completes successfully: set final success reaction
-- when Pi errors or is aborted: set failure/abort reaction
+- when Pi starts processing: print a simple in-progress status line
+- when Pi completes successfully: print the final assistant reply
+- when Pi errors or is aborted: print a simple error or abort status line
 
-### v1 messages
+### v1 output policy
 
-- send only the final assistant reply text back to Discord
-- do not stream token-by-token or delta-by-delta into Discord yet
+- send only the final assistant reply text back to the CLI by default
+- do not require token-by-token or delta-by-delta rendering yet
 
-This keeps the bridge UX stable while the RPC integration is validated.
+This keeps the CLI UX stable while the RPC integration is validated.
 
 ## Thinking visibility
 
-The harness should capture thinking events from Pi RPC, but Discord should not necessarily display them yet.
+The harness should capture thinking events from Pi RPC, but the CLI should not necessarily display them yet.
 
 Policy:
 
 - ingest `thinking_start`, `thinking_delta`, and `thinking_end` when present
 - keep them in the internal event model and logs
-- do not expose them to Discord users in v1 unless there is a specific product reason
+- do not expose them to CLI users in v1 unless there is a specific product reason
 
-This preserves future flexibility without complicating the initial bridge UX.
+This preserves future flexibility without complicating the initial CLI UX.
 
 ## Tool visibility
 
@@ -203,9 +203,9 @@ Capture from Pi RPC:
 - `tool_execution_update`
 - `tool_execution_end`
 
-Bridge behavior in v1:
+CLI behavior in v1:
 
-- do not send raw tool output to Discord by default
+- do not send raw tool output to the CLI by default
 - use tool lifecycle only for internal state and debugging
 
 ## Errors and recovery
@@ -215,7 +215,7 @@ Handle at least these failure modes.
 ### Pi process exits unexpectedly
 
 - mark agent process unhealthy
-- report bridge failure status for the pending message if one exists
+- report failure status for the pending request if one exists
 - require a restart or automatic relaunch depending on final implementation choice
 
 ### RPC parse error
@@ -226,12 +226,12 @@ Handle at least these failure modes.
 
 ### No final assistant text available
 
-- send a bridge-safe fallback message indicating completion without extractable final text
+- send a CLI-safe fallback message indicating completion without extractable final text
 - still mark the task complete
 
-### Discord bridge send failure
+### CLI output failure
 
-- keep Pi session alive
+- keep Pi session alive where possible
 - log failure clearly
 - do not corrupt Pi session state because downstream delivery failed
 
@@ -241,8 +241,8 @@ Harness-owned logs should include:
 
 - Pi process launch command and cwd
 - Pi `sessionId` and `sessionFile` when known
-- inbound Discord message ids
-- outbound bridge completion ids/results
+- inbound request ids
+- outbound completion ids/results
 - raw RPC lines on parse failure
 - summarized event timeline per handled request
 
@@ -251,10 +251,10 @@ Harness-owned logs should include:
 The intended first slice inside this scope is:
 
 - one Pi RPC process
-- one active Discord-bound agent
+- one active CLI-driven session
 - one prompt in, one final reply out
 - session continuity preserved
-- reactions updated correctly
+- simple CLI status output working correctly
 
 Everything else in this document defines the allowed target surface and boundaries for that slice.
 
@@ -267,19 +267,19 @@ These are explicitly deferred:
 - Codex integration
 - session-log tailing first architecture
 - PTY fallback first architecture
-- direct user exposure of thinking traces in Discord
-- rich streamed partial-response UX in Discord
+- direct user exposure of thinking traces in the CLI
+- rich streamed partial-response UX in the CLI
 
 ## Acceptance criteria
 
 The initial implementation is successful when all of the following are true:
 
 1. The harness launches Pi only through `--mode rpc`.
-2. A Discord inbound request can be forwarded to Pi and produce a final Discord reply.
-3. The bridge can show started/completed/error status via reactions.
-4. The harness preserves Pi session continuity across multiple requests to the same bound agent.
+2. A CLI request can be forwarded to Pi and produce a final CLI reply.
+3. The CLI can show started/completed/error status in a simple way.
+4. The harness preserves Pi session continuity across multiple requests in the same harness session.
 5. The harness can tolerate normal RPC event flow without depending on PTY or log scraping.
-6. Tool and thinking events are captured internally even if not shown to Discord users.
+6. Tool and thinking events are captured internally even if not shown to CLI users.
 
 ## Recommendation
 
@@ -288,7 +288,7 @@ Treat this as a boundary document, not a sequencing document.
 The key constraint is:
 
 - Pi RPC is the only upstream
-- the Discord bridge is the only downstream
+- a very simple local CLI is the only downstream
 - logs and PTY are fallback/debugging aids, not the primary architecture
 
 Within those boundaries, implementation can proceed incrementally.
