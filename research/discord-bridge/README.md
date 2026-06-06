@@ -74,3 +74,4 @@ Start with the research docs in this directory:
 - `SPEC.md`
 - `IMPLEMENTATION-PLAN.md`
 - `TICKET.md`
+- `UI-AGENT-MGMT-TICKET.md`
