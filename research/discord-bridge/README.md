@@ -10,7 +10,7 @@ Prototype Go service for the Discord bridge described in this directory.
 - can auto-assign a channel when the agent joins without one
 - queues inbound events for the bound agent
 - adds bridge-owned reactions for ack / progress / final state
-- exposes a small HTTP dashboard plus local API for join, poll, status updates, and completion
+- exposes a small HTTP dashboard plus local API for join, poll, status updates, completion, and launching new `discoagent` processes
 
 ## Run
 
@@ -41,6 +41,9 @@ export DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS=1504560627325079642,148899973494420
 If the explicit auto-assignment env vars are omitted, the bridge will try to infer assignable Discord channels from `~/.openclaw/openclaw.json`.
 
 ## Dashboard
+
+The dashboard includes a simple **Launch Agent** control that can start a new `discoagent` process and bind it to a Discord channel. Leave channel blank to let the bridge auto-assign one from its configured assignable channels.
+
 
 Open:
 

@@ -29,11 +29,19 @@ type completeRequest struct {
 	FinalReaction string `json:"finalReaction"`
 }
 
+type launchAgentRequest struct {
+	AgentID   string `json:"agentId"`
+	GuildID   string `json:"guildId"`
+	ChannelID string `json:"channelId"`
+	Command   string `json:"command"`
+}
+
 func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/api/dashboard", s.handleDashboardData)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/join", s.handleJoin)
+	mux.HandleFunc("/api/launch-agent", s.handleLaunchAgent)
 	mux.HandleFunc("/agents/", s.handleAgents)
 }
 
@@ -107,6 +115,28 @@ func (s *BridgeService) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.appendAudit("agent.join", map[string]any{"agentId": req.AgentID, "channelId": requestedChannelID, "guildId": requestedGuildID, "scope": req.Scope})
 	writeJSON(w, http.StatusOK, binding)
+}
+
+func (s *BridgeService) handleLaunchAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req launchAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.AgentID == "" {
+		http.Error(w, "agentId is required", http.StatusBadRequest)
+		return
+	}
+	launched, err := s.launchAgent(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, launched)
 }
 
 func (s *BridgeService) handleAgents(w http.ResponseWriter, r *http.Request) {

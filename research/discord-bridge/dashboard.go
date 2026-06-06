@@ -11,18 +11,21 @@ import (
 )
 
 type dashboardData struct {
-	Envelope          Envelope           `json:"envelope"`
-	Bindings          map[string]Binding `json:"bindings"`
-	QueueSizes        map[string]int     `json:"queueSizes"`
-	DryRun            bool               `json:"dryRun"`
-	RecentChats       []chatLogRecord    `json:"recentChats"`
-	RecentAttachments []AttachmentRecord `json:"recentAttachments"`
-	AttachmentCount   int                `json:"attachmentCount"`
-	AuditTail         []auditRecord      `json:"auditTail"`
-	ManagedReactions  map[string]string  `json:"managedReactions"`
-	StatusReactions   []string           `json:"statusReactions"`
-	FinalChoices      []string           `json:"finalReactionChoices"`
-	Now               time.Time          `json:"now"`
+	Envelope             Envelope                 `json:"envelope"`
+	Bindings             map[string]Binding       `json:"bindings"`
+	QueueSizes           map[string]int           `json:"queueSizes"`
+	DryRun               bool                     `json:"dryRun"`
+	RecentChats          []chatLogRecord          `json:"recentChats"`
+	RecentAttachments    []AttachmentRecord       `json:"recentAttachments"`
+	AttachmentCount      int                      `json:"attachmentCount"`
+	AuditTail            []auditRecord            `json:"auditTail"`
+	ManagedReactions     map[string]string        `json:"managedReactions"`
+	StatusReactions      []string                 `json:"statusReactions"`
+	FinalChoices         []string                 `json:"finalReactionChoices"`
+	AssignableChannelIDs []string                 `json:"assignableChannelIds"`
+	DefaultGuildID       string                   `json:"defaultGuildId"`
+	LaunchedAgents       map[string]LaunchedAgent `json:"launchedAgents"`
+	Now                  time.Time                `json:"now"`
 }
 
 func (s *BridgeService) dashboardSnapshot() dashboardData {
@@ -39,10 +42,16 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 	for k, v := range s.state.ManagedReactions {
 		reactions[k] = v
 	}
+	launchedAgents := make(map[string]LaunchedAgent, len(s.launchedAgents))
+	for k, v := range s.launchedAgents {
+		launchedAgents[k] = v
+	}
 	envelope := s.envelope
 	dryRun := s.cfg.DryRun
 	statusReactions := append([]string(nil), s.cfg.StatusReactions...)
 	finalChoices := append([]string(nil), s.cfg.FinalReactionChoices...)
+	assignableChannelIDs := append([]string(nil), s.cfg.AssignableChannelIDs...)
+	defaultGuildID := s.cfg.DefaultGuildID
 	logsRoot := s.cfg.LogsRoot
 	downloadsRoot := s.cfg.DownloadsRoot
 	auditPath := s.cfg.AuditPath
@@ -53,18 +62,21 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 	auditTail := readAuditTail(auditPath, 20)
 
 	return dashboardData{
-		Envelope:          envelope,
-		Bindings:          bindings,
-		QueueSizes:        queueSizes,
-		DryRun:            dryRun,
-		RecentChats:       recentChats,
-		RecentAttachments: recentAttachments,
-		AttachmentCount:   attachmentCount,
-		AuditTail:         auditTail,
-		ManagedReactions:  reactions,
-		StatusReactions:   statusReactions,
-		FinalChoices:      finalChoices,
-		Now:               time.Now().UTC(),
+		Envelope:             envelope,
+		Bindings:             bindings,
+		QueueSizes:           queueSizes,
+		DryRun:               dryRun,
+		RecentChats:          recentChats,
+		RecentAttachments:    recentAttachments,
+		AttachmentCount:      attachmentCount,
+		AuditTail:            auditTail,
+		ManagedReactions:     reactions,
+		StatusReactions:      statusReactions,
+		FinalChoices:         finalChoices,
+		AssignableChannelIDs: assignableChannelIDs,
+		DefaultGuildID:       defaultGuildID,
+		LaunchedAgents:       launchedAgents,
+		Now:                  time.Now().UTC(),
 	}
 }
 
@@ -154,9 +166,20 @@ func renderDashboardHTML() string {
   </header>
   <main>
     <section class="card"><h2>Bridge</h2><pre id="bridge"></pre></section>
+    <section class="card"><h2>Launch Agent</h2>
+      <form id="launch-form">
+        <div><label>Agent ID<br><input name="agentId" value="agent-1" style="width:100%"></label></div>
+        <div><label>Guild ID (optional)<br><input name="guildId" style="width:100%"></label></div>
+        <div><label>Channel ID (optional)<br><input name="channelId" style="width:100%"></label></div>
+        <div><label>Command (optional)<br><input name="command" value="discoagent" style="width:100%"></label></div>
+        <div style="margin-top:10px"><button type="submit">Launch</button></div>
+      </form>
+      <div id="launch-result" class="muted" style="margin-top:10px"></div>
+    </section>
     <section class="card"><h2>Bindings</h2><pre id="bindings"></pre></section>
     <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
     <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
+    <section class="card"><h2>Launched Agents</h2><pre id="launched"></pre></section>
     <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
     <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
     <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
@@ -171,14 +194,29 @@ func renderDashboardHTML() string {
     async function refresh() {
       const res = await fetch('/api/dashboard');
       const data = await res.json();
-      document.getElementById('bridge').textContent = pretty({ envelope: data.envelope, dryRun: data.dryRun, now: data.now, statusReactions: data.statusReactions, finalChoices: data.finalReactionChoices });
+      document.getElementById('bridge').textContent = pretty({ envelope: data.envelope, dryRun: data.dryRun, now: data.now, defaultGuildId: data.defaultGuildId, assignableChannelIds: data.assignableChannelIds, statusReactions: data.statusReactions, finalChoices: data.finalReactionChoices });
       document.getElementById('bindings').textContent = pretty(data.bindings);
       document.getElementById('queues').textContent = pretty(data.queueSizes);
       document.getElementById('reactions').textContent = pretty(data.managedReactions);
+      document.getElementById('launched').textContent = pretty(data.launchedAgents);
       document.getElementById('chats').innerHTML = renderRows(data.recentChats, (item) => '<tr><td><strong>' + esc(item.authorName || item.authorId || 'unknown') + '</strong><div class="muted">' + esc(item.channelId) + ' · ' + esc(item.timestamp) + '</div></td><td>' + esc(item.content || '') + '</td></tr>');
       document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
       document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');
     }
+    document.getElementById('launch-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const payload = {
+        agentId: String(form.get('agentId') || '').trim(),
+        guildId: String(form.get('guildId') || '').trim(),
+        channelId: String(form.get('channelId') || '').trim(),
+        command: String(form.get('command') || '').trim()
+      };
+      const res = await fetch('/api/launch-agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const text = await res.text();
+      document.getElementById('launch-result').textContent = res.ok ? 'Launched: ' + text : 'Launch failed: ' + text;
+      refresh();
+    });
     refresh();
     setInterval(refresh, 5000);
   </script>

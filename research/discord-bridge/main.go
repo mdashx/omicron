@@ -205,15 +205,27 @@ type InboundEvent struct {
 	ReplyToID   string             `json:"replyToId,omitempty"`
 }
 
+type LaunchedAgent struct {
+	AgentID   string    `json:"agentId"`
+	GuildID   string    `json:"guildId,omitempty"`
+	ChannelID string    `json:"channelId,omitempty"`
+	Command   string    `json:"command"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"startedAt"`
+	LogPath   string    `json:"logPath"`
+	State     string    `json:"state"`
+}
+
 type BridgeService struct {
-	cfg        Config
-	envelope   Envelope
-	dg         *discordgo.Session
-	httpServer *http.Server
-	started    time.Time
-	state      PersistedState
-	queues     map[string][]InboundEvent
-	mu         sync.Mutex
+	cfg            Config
+	envelope       Envelope
+	dg             *discordgo.Session
+	httpServer     *http.Server
+	started        time.Time
+	state          PersistedState
+	queues         map[string][]InboundEvent
+	launchedAgents map[string]LaunchedAgent
+	mu             sync.Mutex
 }
 
 func NewBridgeService(cfg Config) (*BridgeService, error) {
@@ -227,10 +239,11 @@ func NewBridgeService(cfg Config) (*BridgeService, error) {
 		return nil, err
 	}
 	s := &BridgeService{
-		cfg:     cfg,
-		started: time.Now().UTC(),
-		state:   state,
-		queues:  map[string][]InboundEvent{},
+		cfg:            cfg,
+		started:        time.Now().UTC(),
+		state:          state,
+		queues:         map[string][]InboundEvent{},
+		launchedAgents: map[string]LaunchedAgent{},
 		envelope: Envelope{
 			BridgeID:    cfg.BridgeID,
 			StartedAt:   time.Now().UTC(),
