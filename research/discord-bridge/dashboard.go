@@ -18,23 +18,25 @@ type channelOption struct {
 }
 
 type dashboardData struct {
-	Envelope             Envelope                 `json:"envelope"`
-	Bindings             map[string]Binding       `json:"bindings"`
-	QueueSizes           map[string]int           `json:"queueSizes"`
-	DryRun               bool                     `json:"dryRun"`
-	RecentChats          []chatLogRecord          `json:"recentChats"`
-	RecentAttachments    []AttachmentRecord       `json:"recentAttachments"`
-	AttachmentCount      int                      `json:"attachmentCount"`
-	AuditTail            []auditRecord            `json:"auditTail"`
-	ManagedReactions     map[string]string        `json:"managedReactions"`
-	StatusReactions      []string                 `json:"statusReactions"`
-	FinalChoices         []string                 `json:"finalReactionChoices"`
-	AssignableChannelIDs []string                 `json:"assignableChannelIds"`
-	AssignableChannels   []channelOption          `json:"assignableChannels"`
-	DefaultGuildID       string                   `json:"defaultGuildId"`
-	LaunchedAgents       map[string]LaunchedAgent `json:"launchedAgents"`
-	LaunchedAgentLogs    map[string][]string      `json:"launchedAgentLogs"`
-	Now                  time.Time                `json:"now"`
+	Envelope                Envelope                 `json:"envelope"`
+	Bindings                map[string]Binding       `json:"bindings"`
+	QueueSizes              map[string]int           `json:"queueSizes"`
+	DryRun                  bool                     `json:"dryRun"`
+	RecentChats             []chatLogRecord          `json:"recentChats"`
+	RecentAttachments       []AttachmentRecord       `json:"recentAttachments"`
+	AttachmentCount         int                      `json:"attachmentCount"`
+	AuditTail               []auditRecord            `json:"auditTail"`
+	ManagedReactions        map[string]string        `json:"managedReactions"`
+	StatusReactions         []string                 `json:"statusReactions"`
+	FinalChoices            []string                 `json:"finalReactionChoices"`
+	AssignableChannelIDs    []string                 `json:"assignableChannelIds"`
+	AssignableChannels      []channelOption          `json:"assignableChannels"`
+	DefaultGuildID          string                   `json:"defaultGuildId"`
+	LaunchedAgents          map[string]LaunchedAgent `json:"launchedAgents"`
+	LaunchedAgentLogs       map[string][]string      `json:"launchedAgentLogs"`
+	LaunchedAgentPTYInputs  map[string][]string      `json:"launchedAgentPtyInputs"`
+	LaunchedAgentPTYOutputs map[string][]string      `json:"launchedAgentPtyOutputs"`
+	Now                     time.Time                `json:"now"`
 }
 
 func (s *BridgeService) dashboardSnapshot() dashboardData {
@@ -68,28 +70,32 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 
 	assignableChannels := s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs)
 	launchedAgentLogs := readLaunchedAgentLogs(launchedAgents, 30)
+	launchedAgentPTYInputs := readLaunchedAgentTranscript(launchedAgents, "pty-input.log", 40)
+	launchedAgentPTYOutputs := readLaunchedAgentTranscript(launchedAgents, "pty-output.log", 60)
 	recentChats := readRecentChats(logsRoot, 20)
 	recentAttachments, attachmentCount := readRecentAttachments(downloadsRoot, 20)
 	auditTail := readAuditTail(auditPath, 20)
 
 	return dashboardData{
-		Envelope:             envelope,
-		Bindings:             bindings,
-		QueueSizes:           queueSizes,
-		DryRun:               dryRun,
-		RecentChats:          recentChats,
-		RecentAttachments:    recentAttachments,
-		AttachmentCount:      attachmentCount,
-		AuditTail:            auditTail,
-		ManagedReactions:     reactions,
-		StatusReactions:      statusReactions,
-		FinalChoices:         finalChoices,
-		AssignableChannelIDs: assignableChannelIDs,
-		AssignableChannels:   assignableChannels,
-		DefaultGuildID:       defaultGuildID,
-		LaunchedAgents:       launchedAgents,
-		LaunchedAgentLogs:    launchedAgentLogs,
-		Now:                  time.Now().UTC(),
+		Envelope:                envelope,
+		Bindings:                bindings,
+		QueueSizes:              queueSizes,
+		DryRun:                  dryRun,
+		RecentChats:             recentChats,
+		RecentAttachments:       recentAttachments,
+		AttachmentCount:         attachmentCount,
+		AuditTail:               auditTail,
+		ManagedReactions:        reactions,
+		StatusReactions:         statusReactions,
+		FinalChoices:            finalChoices,
+		AssignableChannelIDs:    assignableChannelIDs,
+		AssignableChannels:      assignableChannels,
+		DefaultGuildID:          defaultGuildID,
+		LaunchedAgents:          launchedAgents,
+		LaunchedAgentLogs:       launchedAgentLogs,
+		LaunchedAgentPTYInputs:  launchedAgentPTYInputs,
+		LaunchedAgentPTYOutputs: launchedAgentPTYOutputs,
+		Now:                     time.Now().UTC(),
 	}
 }
 
@@ -122,6 +128,18 @@ func readLaunchedAgentLogs(agents map[string]LaunchedAgent, limit int) map[strin
 			continue
 		}
 		logs[agentID] = readAgentLogSince(agent.LogPath, agent.StartedAt, limit)
+	}
+	return logs
+}
+
+func readLaunchedAgentTranscript(agents map[string]LaunchedAgent, name string, limit int) map[string][]string {
+	logs := make(map[string][]string, len(agents))
+	for agentID, agent := range agents {
+		if agent.LogPath == "" {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(agent.LogPath), name)
+		logs[agentID] = readLastLines(path, limit)
 	}
 	return logs
 }
@@ -258,7 +276,9 @@ func renderDashboardHTML() string {
     <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
     <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
     <section class="card"><h2>Launched Agents</h2><pre id="launched"></pre></section>
-    <section class="card"><h2>PTY Log Preview</h2><div id="ptylogs"></div></section>
+    <section class="card"><h2>Harness Log Preview</h2><div id="ptylogs"></div></section>
+    <section class="card"><h2>PTY Input Preview</h2><div id="ptyinputs"></div></section>
+    <section class="card"><h2>PTY Transcript Preview</h2><div id="ptyoutputs"></div></section>
     <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
     <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
     <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
@@ -287,7 +307,11 @@ func renderDashboardHTML() string {
       document.getElementById('reactions').textContent = pretty(data.managedReactions);
       document.getElementById('launched').textContent = pretty(data.launchedAgents);
       const logEntries = Object.entries(data.launchedAgentLogs || {});
+      const inputEntries = Object.entries(data.launchedAgentPtyInputs || {});
+      const outputEntries = Object.entries(data.launchedAgentPtyOutputs || {});
       document.getElementById('ptylogs').innerHTML = logEntries.length ? logEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No launched agent logs yet.</div>';
+      document.getElementById('ptyinputs').innerHTML = inputEntries.length ? inputEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No PTY input transcript yet.</div>';
+      document.getElementById('ptyoutputs').innerHTML = outputEntries.length ? outputEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No PTY transcript yet.</div>';
       document.getElementById('chats').innerHTML = renderRows(data.recentChats, (item) => '<tr><td><strong>' + esc(item.authorName || item.authorId || 'unknown') + '</strong><div class="muted">' + esc(item.channelId) + ' · ' + esc(item.timestamp) + '</div></td><td>' + esc(item.content || '') + '</td></tr>');
       document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
       document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');

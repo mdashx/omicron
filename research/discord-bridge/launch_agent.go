@@ -57,6 +57,8 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 		"DISCORD_BRIDGE_URL=http://127.0.0.1:19444",
 		"DISCORD_BRIDGE_GUILD_ID="+requestedGuildID,
 		"DISCORD_BRIDGE_CHANNEL_ID="+requestedChannelID,
+		"DISCORD_BRIDGE_PTY_INPUT_LOG="+filepath.Join(agentDir, "pty-input.log"),
+		"DISCORD_BRIDGE_PTY_OUTPUT_LOG="+filepath.Join(agentDir, "pty-output.log"),
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

@@ -33,6 +33,8 @@ type Config struct {
 	PiSessionRoot        string        `json:"piSessionRoot"`
 	PiSessionArchiveRoot string        `json:"piSessionArchiveRoot"`
 	PiLogPreference      string        `json:"piLogPreference"`
+	PTYInputLogPath      string        `json:"ptyInputLogPath"`
+	PTYOutputLogPath     string        `json:"ptyOutputLogPath"`
 }
 
 func LoadConfig() (Config, error) {
@@ -57,6 +59,8 @@ func LoadConfig() (Config, error) {
 		PiSessionRoot:        expandPath("~/.pi/agent/sessions"),
 		PiSessionArchiveRoot: expandPath("~/.pi/agent/session-archive"),
 		PiLogPreference:      "session-archive",
+		PTYInputLogPath:      filepath.Join(root, "pty-input.log"),
+		PTYOutputLogPath:     filepath.Join(root, "pty-output.log"),
 	}
 	configPath := expandPath(envOr("DISCORD_BRIDGE_CLIENT_CONFIG", "~/.pi/discord-bridge-client/config.json"))
 	if raw, err := os.ReadFile(configPath); err == nil {
@@ -78,6 +82,8 @@ func LoadConfig() (Config, error) {
 	cfg.Cwd = expandPath(cfg.Cwd)
 	cfg.PiSessionRoot = expandPath(cfg.PiSessionRoot)
 	cfg.PiSessionArchiveRoot = expandPath(cfg.PiSessionArchiveRoot)
+	cfg.PTYInputLogPath = expandPath(cfg.PTYInputLogPath)
+	cfg.PTYOutputLogPath = expandPath(cfg.PTYOutputLogPath)
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -99,6 +105,9 @@ func (c Config) Validate() error {
 	}
 	if c.OutputMode == "" {
 		return errors.New("outputMode is required")
+	}
+	if c.PTYInputLogPath == "" || c.PTYOutputLogPath == "" {
+		return errors.New("pty transcript log paths are required")
 	}
 	if c.Cols == 0 || c.Rows == 0 {
 		return errors.New("pty cols and rows must be > 0")
@@ -204,5 +213,11 @@ func (c *Config) applyEnvOverrides(cwd string) {
 	}
 	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_LOG_PREFERENCE")); value != "" {
 		c.PiLogPreference = value
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PTY_INPUT_LOG")); value != "" {
+		c.PTYInputLogPath = expandPath(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PTY_OUTPUT_LOG")); value != "" {
+		c.PTYOutputLogPath = expandPath(value)
 	}
 }
