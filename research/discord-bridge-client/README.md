@@ -51,7 +51,7 @@ export DISCORD_BRIDGE_IDLE_COMPLETE_MS=2500
 
 ## Notes
 
-This is a PTY-based harness prototype. Inbound Discord work is still injected through the PTY so Pi behaves like a normal terminal app, but for Pi-backed agents the harness now prefers Pi JSONL session/archive logs as the authoritative outbound reply source. PTY idle-based completion remains as the fallback path.
+This is a PTY-based harness prototype. Inbound Discord work is still injected through the PTY so Pi behaves like a normal terminal app, but outbound reply handling is now restricted to native Pi session JSONL. PTY transcript logs remain for debugging, but they are not used as an output source.
 
 Research docs:
 - `SPEC.md`

@@ -60,7 +60,6 @@ type PiStructuredOutputSource struct {
 	AgentID      string    `json:"agentId"`
 	Mode         string    `json:"mode"`
 	SessionFile  string    `json:"sessionFile,omitempty"`
-	ArchiveFile  string    `json:"archiveFile,omitempty"`
 	RegisteredAt time.Time `json:"registeredAt,omitempty"`
 	Active       bool      `json:"active"`
 }

@@ -24,8 +24,6 @@ type piOutputMonitor struct {
 }
 
 type piOutputCursor struct {
-	archivePath   string
-	archiveOffset int64
 	sessionPath   string
 	sessionOffset int64
 }
@@ -40,9 +38,6 @@ func newPiOutputMonitor(cfg Config, launchTime time.Time) *piOutputMonitor {
 }
 
 func (m *piOutputMonitor) Enabled() bool {
-	if strings.TrimSpace(m.cfg.OutputMode) != "pi-jsonl" {
-		return false
-	}
 	base := filepath.Base(strings.TrimSpace(m.cfg.Command))
 	return base == "pi"
 }
@@ -56,10 +51,7 @@ func (m *piOutputMonitor) Resolve() PiStructuredOutputSource {
 	if session := m.findLatestSessionFile(); session != "" {
 		source.SessionFile = session
 	}
-	if archive := m.findLatestArchiveFile(); archive != "" {
-		source.ArchiveFile = archive
-	}
-	source.Active = source.SessionFile != "" || source.ArchiveFile != ""
+	source.Active = source.SessionFile != ""
 
 	m.mu.Lock()
 	m.source = source
@@ -69,12 +61,9 @@ func (m *piOutputMonitor) Resolve() PiStructuredOutputSource {
 
 func (m *piOutputMonitor) Snapshot() piOutputCursor {
 	source := m.Resolve()
-	cursor := piOutputCursor{archivePath: source.ArchiveFile, sessionPath: source.SessionFile}
+	cursor := piOutputCursor{sessionPath: source.SessionFile}
 	if source.SessionFile != "" {
 		cursor.sessionOffset = fileSize(source.SessionFile)
-	}
-	if source.ArchiveFile != "" {
-		cursor.archiveOffset = fileSize(source.ArchiveFile)
 	}
 	return cursor
 }
@@ -88,29 +77,14 @@ func (m *piOutputMonitor) WaitForReply(cursor piOutputCursor, idle time.Duration
 	poll := time.NewTicker(250 * time.Millisecond)
 	defer poll.Stop()
 	lastActivity := time.Now()
-	archiveText := ""
 	sessionText := ""
 	sawAny := false
 	for range poll.C {
-		if cursor.archivePath == "" || cursor.sessionPath == "" {
+		if cursor.sessionPath == "" {
 			source := m.Resolve()
-			if cursor.archivePath == "" && source.ArchiveFile != "" {
-				cursor.archivePath = source.ArchiveFile
-				cursor.archiveOffset = 0
-			}
 			if cursor.sessionPath == "" && source.SessionFile != "" {
 				cursor.sessionPath = source.SessionFile
 				cursor.sessionOffset = 0
-			}
-		}
-		if cursor.archivePath != "" {
-			if text, next, changed := readPiReplyDelta(cursor.archivePath, cursor.archiveOffset); changed {
-				cursor.archiveOffset = next
-				if text != "" {
-					archiveText = text
-					lastActivity = time.Now()
-					sawAny = true
-				}
 			}
 		}
 		if cursor.sessionPath != "" {
@@ -127,9 +101,6 @@ func (m *piOutputMonitor) WaitForReply(cursor piOutputCursor, idle time.Duration
 			if sessionText != "" {
 				return sessionText, true
 			}
-			if archiveText != "" {
-				return archiveText, true
-			}
 		}
 		if time.Now().After(deadline) {
 			break
@@ -138,14 +109,7 @@ func (m *piOutputMonitor) WaitForReply(cursor piOutputCursor, idle time.Duration
 	if sessionText != "" {
 		return sessionText, true
 	}
-	if archiveText != "" {
-		return archiveText, true
-	}
 	return "", false
-}
-
-func (m *piOutputMonitor) findLatestArchiveFile() string {
-	return m.findLatestMatchingFile(m.cfg.PiSessionArchiveRoot, isPiArchiveForCwd)
 }
 
 func (m *piOutputMonitor) findLatestSessionFile() string {
@@ -182,31 +146,6 @@ func (m *piOutputMonitor) findLatestMatchingFile(root string, match func(string,
 		return candidates[i].modTime.After(candidates[j].modTime)
 	})
 	return candidates[0].path
-}
-
-func isPiArchiveForCwd(path, cwd string) bool {
-	line, err := readFirstLine(path)
-	if err != nil || strings.TrimSpace(line) == "" {
-		return false
-	}
-	var evt struct {
-		Role      string `json:"role"`
-		EventType string `json:"eventType"`
-		Content   string `json:"content"`
-	}
-	if json.Unmarshal([]byte(line), &evt) != nil {
-		return false
-	}
-	if evt.Role != "system" || evt.EventType != "session_start" || evt.Content == "" {
-		return false
-	}
-	var envelope struct {
-		Cwd string `json:"cwd"`
-	}
-	if json.Unmarshal([]byte(evt.Content), &envelope) != nil {
-		return false
-	}
-	return filepath.Clean(envelope.Cwd) == filepath.Clean(cwd)
 }
 
 func isPiSessionForCwd(path, cwd string) bool {

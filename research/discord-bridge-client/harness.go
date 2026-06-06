@@ -70,7 +70,7 @@ func (h *Harness) Run(ctx context.Context) error {
 			return err
 		}
 		h.mu.Unlock()
-		log.Printf("pi output source agent=%s archive=%s session=%s", h.cfg.AgentID, source.ArchiveFile, source.SessionFile)
+		log.Printf("pi output source agent=%s session=%s", h.cfg.AgentID, source.SessionFile)
 	}
 	defer h.agent.Close()
 	log.Printf("bridge client joined bridge=%s agent=%s channel=%s cmd=%s", h.cfg.BridgeURL, h.cfg.AgentID, h.cfg.ChannelID, h.cfg.Command)
@@ -138,19 +138,14 @@ func (h *Harness) handleEvent(evt InboundEvent) error {
 func (h *Harness) buildStructuredReplyNotice() string {
 	source := h.currentOutputSource()
 	path := strings.TrimSpace(source.SessionFile)
-	sourceKind := "session"
 	if path == "" {
-		path = strings.TrimSpace(source.ArchiveFile)
-		sourceKind = "session-archive"
-	}
-	if path == "" {
-		return "agent replied\noutputMode: pi-jsonl\nlogSource: unavailable"
+		return "agent replied\noutputMode: pi-session-jsonl\nlogSource: unavailable"
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Sprintf("agent replied\noutputMode: pi-jsonl\nlogSource: %s\nlogPath: %s\nlogStatError: %v", sourceKind, path, err)
+		return fmt.Sprintf("agent replied\noutputMode: pi-session-jsonl\nlogSource: session\nlogPath: %s\nlogStatError: %v", path, err)
 	}
-	return fmt.Sprintf("agent replied\noutputMode: pi-jsonl\nlogSource: %s\nlogPath: %s\nlogFile: %s\nlogBytes: %d\nlogModifiedAt: %s", sourceKind, path, filepath.Base(path), info.Size(), info.ModTime().UTC().Format(time.RFC3339))
+	return fmt.Sprintf("agent replied\noutputMode: pi-session-jsonl\nlogSource: session\nlogPath: %s\nlogFile: %s\nlogBytes: %d\nlogModifiedAt: %s", path, filepath.Base(path), info.Size(), info.ModTime().UTC().Format(time.RFC3339))
 }
 
 func (h *Harness) currentOutputSource() PiStructuredOutputSource {
@@ -169,6 +164,7 @@ func (h *Harness) waitForCompletion(cursor piOutputCursor, useStructuredOutput b
 			h.syncOutputSource()
 			return CompletionResult{Text: strings.TrimSpace(text), FinalReaction: h.cfg.FinalReaction}, nil
 		}
+		return CompletionResult{Text: "", FinalReaction: h.cfg.FinalReaction}, nil
 	}
 	return h.agent.WaitForTurnResult(h.cfg.IdleCompleteWait)
 }
