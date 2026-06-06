@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -95,5 +96,26 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 		s.mu.Unlock()
 		_ = s.appendAudit("agent.launch.exit", map[string]any{"agentId": agentID, "state": launched.State})
 	}(req.AgentID, cmd.Process)
+	return launched, nil
+}
+
+func (s *BridgeService) stopAgent(agentID string) (LaunchedAgent, error) {
+	s.mu.Lock()
+	launched, ok := s.launchedAgents[agentID]
+	s.mu.Unlock()
+	if !ok {
+		return LaunchedAgent{}, errors.New("launched agent not found")
+	}
+	if launched.PID <= 0 {
+		return LaunchedAgent{}, errors.New("launched agent has no pid")
+	}
+	if err := syscall.Kill(-launched.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return LaunchedAgent{}, err
+	}
+	launched.State = "stopped"
+	s.mu.Lock()
+	s.launchedAgents[agentID] = launched
+	s.mu.Unlock()
+	_ = s.appendAudit("agent.stop", map[string]any{"agentId": agentID, "pid": launched.PID})
 	return launched, nil
 }

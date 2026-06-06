@@ -30,6 +30,8 @@ type Config struct {
 	ThinkingReaction string        `json:"thinkingReaction"`
 	FinalReaction    string        `json:"finalReaction"`
 	PiSessionRoot    string        `json:"piSessionRoot"`
+	PiBootstrapInput string        `json:"piBootstrapInput"`
+	PiBootstrapWait  time.Duration `json:"piBootstrapWaitMs"`
 	PTYInputLogPath  string        `json:"ptyInputLogPath"`
 	PTYOutputLogPath string        `json:"ptyOutputLogPath"`
 }
@@ -53,6 +55,8 @@ func LoadConfig() (Config, error) {
 		ThinkingReaction: "💭",
 		FinalReaction:    "✅",
 		PiSessionRoot:    expandPath("~/.pi/agent/sessions"),
+		PiBootstrapInput: "/new\n[bridge bootstrap] initialize the session log for this terminal session. Reply with exactly: ok",
+		PiBootstrapWait:  8000 * time.Millisecond,
 		PTYInputLogPath:  filepath.Join(root, "pty-input.log"),
 		PTYOutputLogPath: filepath.Join(root, "pty-output.log"),
 	}
@@ -93,8 +97,8 @@ func (c Config) Validate() error {
 	if c.Command == "" || c.Cwd == "" {
 		return errors.New("command and cwd are required")
 	}
-	if c.PollInterval <= 0 || c.IdleCompleteWait <= 0 {
-		return errors.New("poll and idle completion timings must be > 0")
+	if c.PollInterval <= 0 || c.IdleCompleteWait <= 0 || c.PiBootstrapWait <= 0 {
+		return errors.New("poll, idle completion, and bootstrap timings must be > 0")
 	}
 	if c.PiSessionRoot == "" {
 		return errors.New("piSessionRoot is required")
@@ -197,6 +201,12 @@ func (c *Config) applyEnvOverrides(cwd string) {
 	}
 	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_SESSION_ROOT")); value != "" {
 		c.PiSessionRoot = expandPath(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_BOOTSTRAP_INPUT")); value != "" {
+		c.PiBootstrapInput = value
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_BOOTSTRAP_WAIT_MS")); value != "" {
+		c.PiBootstrapWait = time.Duration(envOrInt("DISCORD_BRIDGE_PI_BOOTSTRAP_WAIT_MS", 2000)) * time.Millisecond
 	}
 	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PTY_INPUT_LOG")); value != "" {
 		c.PTYInputLogPath = expandPath(value)

@@ -36,12 +36,17 @@ type launchAgentRequest struct {
 	Command   string `json:"command"`
 }
 
+type stopAgentRequest struct {
+	AgentID string `json:"agentId"`
+}
+
 func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/api/dashboard", s.handleDashboardData)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/join", s.handleJoin)
 	mux.HandleFunc("/api/launch-agent", s.handleLaunchAgent)
+	mux.HandleFunc("/api/stop-agent", s.handleStopAgent)
 	mux.HandleFunc("/agents/", s.handleAgents)
 }
 
@@ -132,6 +137,28 @@ func (s *BridgeService) handleLaunchAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	launched, err := s.launchAgent(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, launched)
+}
+
+func (s *BridgeService) handleStopAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req stopAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.AgentID == "" {
+		http.Error(w, "agentId is required", http.StatusBadRequest)
+		return
+	}
+	launched, err := s.stopAgent(req.AgentID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -62,6 +62,9 @@ func (h *Harness) Run(ctx context.Context) error {
 	h.agent = agent
 	h.output = newPiOutputMonitor(h.cfg, agent.StartedAt())
 	if h.output.Enabled() {
+		if err := h.bootstrapPiSession(); err != nil {
+			log.Printf("pi bootstrap error: %v", err)
+		}
 		source := h.output.Resolve()
 		h.mu.Lock()
 		h.state.OutputSource = source
@@ -86,6 +89,28 @@ func (h *Harness) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (h *Harness) bootstrapPiSession() error {
+	if h.output == nil || !h.output.Enabled() {
+		return nil
+	}
+	if strings.TrimSpace(h.cfg.PiBootstrapInput) == "" {
+		return nil
+	}
+	if err := h.agent.Inject(h.cfg.PiBootstrapInput); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(h.cfg.PiBootstrapWait)
+	for time.Now().Before(deadline) {
+		h.syncOutputSource()
+		if source := h.currentOutputSource(); strings.TrimSpace(source.SessionFile) != "" {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	h.syncOutputSource()
+	return nil
 }
 
 func (h *Harness) processOnce() error {

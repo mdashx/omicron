@@ -275,7 +275,7 @@ func renderDashboardHTML() string {
     <section class="card"><h2>Bindings</h2><pre id="bindings"></pre></section>
     <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
     <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
-    <section class="card"><h2>Launched Agents</h2><pre id="launched"></pre></section>
+    <section class="card"><h2>Launched Agents</h2><div id="launched-controls"></div><pre id="launched"></pre></section>
     <section class="card"><h2>Harness Log Preview</h2><div id="ptylogs"></div></section>
     <section class="card"><h2>PTY Input Preview</h2><div id="ptyinputs"></div></section>
     <section class="card"><h2>PTY Transcript Preview</h2><div id="ptyoutputs"></div></section>
@@ -306,6 +306,8 @@ func renderDashboardHTML() string {
       document.getElementById('queues').textContent = pretty(data.queueSizes);
       document.getElementById('reactions').textContent = pretty(data.managedReactions);
       document.getElementById('launched').textContent = pretty(data.launchedAgents);
+      const launchedEntries = Object.entries(data.launchedAgents || {});
+      document.getElementById('launched-controls').innerHTML = launchedEntries.length ? launchedEntries.map(([agentId, agent]) => '<div style="margin:0 0 8px 0"><button data-stop-agent="' + esc(agentId) + '"' + ((agent && agent.state === 'running') ? '' : ' disabled') + '>Stop ' + esc(agentId) + '</button> <span class="muted">' + esc((agent && agent.state) || 'unknown') + '</span></div>').join('') : '<div class="muted">No launched agents.</div>';
       const logEntries = Object.entries(data.launchedAgentLogs || {});
       const inputEntries = Object.entries(data.launchedAgentPtyInputs || {});
       const outputEntries = Object.entries(data.launchedAgentPtyOutputs || {});
@@ -316,6 +318,15 @@ func renderDashboardHTML() string {
       document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
       document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');
     }
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-stop-agent]');
+      if (!btn) return;
+      const agentId = btn.getAttribute('data-stop-agent');
+      const res = await fetch('/api/stop-agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId }) });
+      const text = await res.text();
+      document.getElementById('launch-result').textContent = res.ok ? 'Stopped: ' + text : 'Stop failed: ' + text;
+      refresh();
+    });
     document.getElementById('launch-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = new FormData(e.target);
