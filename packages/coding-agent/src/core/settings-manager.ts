@@ -4,8 +4,9 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
-import type { SessionArchiveConfig } from "./session-archive.ts";
+import type { DiscordTransportConfig } from "./discord-transport.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { SessionArchiveConfig } from "./session-archive.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -115,6 +116,7 @@ export interface Settings {
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	sessionArchive?: SessionArchiveConfig;
+	discordTransport?: DiscordTransportConfig;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -741,6 +743,10 @@ export class SettingsManager {
 		this.globalSettings.transport = transport;
 		this.markModified("transport");
 		this.save();
+	}
+
+	getDiscordTransport(): DiscordTransportConfig | undefined {
+		return this.settings.discordTransport ? structuredClone(this.settings.discordTransport) : undefined;
 	}
 
 	getCompactionEnabled(): boolean {

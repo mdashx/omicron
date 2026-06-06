@@ -49,6 +49,37 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.ts";
+export {
+	createDiscordHeartbeatEvent,
+	createDiscordJsTransportClient,
+	createDiscordSessionEnvelope,
+	createDiscordTransport,
+	type DiscordActionPlan,
+	type DiscordActionType,
+	type DiscordClientIdentity,
+	type DiscordDirective,
+	type DiscordDirectiveType,
+	type DiscordInboundEvent,
+	type DiscordInboundEventType,
+	type DiscordSessionEnvelope,
+	type DiscordTransport,
+	type DiscordTransportClientAdapter,
+	type DiscordTransportConfig,
+	type DiscordTransportDefaults,
+	type DiscordTransportMessageLike,
+	type DiscordTransportReactionLike,
+	type DiscordTransportSessionLike,
+	type DiscordTransportState,
+	getDiscordTransportDefaults,
+	normalizeDiscordMessage,
+	normalizeDiscordReaction,
+	normalizeDiscordReadyEvent,
+	parseDiscordDirective,
+	planDiscordActions,
+	type ResolvedDiscordTransportConfig,
+	resolveDiscordToken,
+	resolveDiscordTransportConfig,
+} from "./core/discord-transport.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
 export type {
@@ -149,6 +180,21 @@ export {
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+export {
+	createSessionArchiveRuntime,
+	PiArchiveEnforcement,
+	type PiArchiveEvent,
+	PiArchiveWriter,
+	type PiSessionEnvelope,
+	type ResolvedSessionArchiveConfig,
+	resolveSessionArchiveConfig,
+	type SessionArchiveConfig,
+	SessionArchiveDefaults,
+	type SessionArchiveEventType,
+	type SessionArchiveRedactMode,
+	type SessionArchiveRole,
+	type SessionArchiveRuntime,
+} from "./core/index.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export type {
@@ -173,19 +219,6 @@ export {
 	type CreateAgentSessionRuntimeFactory,
 	type CreateAgentSessionRuntimeResult,
 	type CreateAgentSessionServicesOptions,
-	PiArchiveEnforcement,
-	PiArchiveWriter,
-	SessionArchiveDefaults,
-	createSessionArchiveRuntime,
-	type PiArchiveEvent,
-	type PiSessionEnvelope,
-	type ResolvedSessionArchiveConfig,
-	type SessionArchiveConfig,
-	type SessionArchiveEventType,
-	type SessionArchiveRedactMode,
-	type SessionArchiveRole,
-	type SessionArchiveRuntime,
-	resolveSessionArchiveConfig,
 	// Factory
 	createAgentSession,
 	createAgentSessionFromServices,

@@ -23,8 +23,14 @@ import {
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage } from "./core/auth-storage.ts";
+import {
+	createDiscordJsTransportClient,
+	createDiscordTransport,
+	type DiscordTransport,
+	resolveDiscordToken,
+	resolveDiscordTransportConfig,
+} from "./core/discord-transport.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
-import { createSessionArchiveRuntime } from "./core/session-archive.ts";
 import type { ExtensionFactory } from "./core/extensions/types.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
@@ -32,6 +38,7 @@ import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
+import { createSessionArchiveRuntime } from "./core/session-archive.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
@@ -821,6 +828,27 @@ export async function main(args: string[], options?: MainOptions) {
 	if (appMode !== "interactive" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
 		process.exit(1);
+	}
+
+	const discordTransportConfig = resolveDiscordTransportConfig(settingsManager.getDiscordTransport());
+	let discordTransport: DiscordTransport | undefined;
+	const discordToken = await resolveDiscordToken(discordTransportConfig.tokenSource);
+	if (discordTransportConfig.enabled && discordToken) {
+		discordTransport = createDiscordTransport({
+			config: discordTransportConfig,
+			session,
+			client: createDiscordJsTransportClient(),
+			host: process.env.HOSTNAME ?? process.env.COMPUTERNAME,
+			runtimeVersion: process.version,
+			packageVersion: VERSION,
+		});
+		runtime.setRebindSession(async (nextSession) => {
+			discordTransport?.setSession(nextSession);
+		});
+		runtime.setBeforeSessionInvalidate(() => {
+			discordTransport?.detachSession();
+		});
+		await discordTransport.start();
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);

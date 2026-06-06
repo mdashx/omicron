@@ -54,6 +54,7 @@ func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/partials/activity-feed", s.handleActivityFeedPartial)
 	mux.HandleFunc("/api/dashboard", s.handleDashboardData)
 	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/admin/restart", s.handleBridgeRestart)
 	mux.HandleFunc("/join", s.handleJoin)
 	mux.HandleFunc("/api/launch-agent", s.handleLaunchAgent)
 	mux.HandleFunc("/api/stop-agent", s.handleStopAgent)
@@ -247,7 +248,7 @@ func (s *BridgeService) handleAgentComplete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Content != "" {
-		if err := s.sendChannelMessage(binding.ChannelID, req.Content, req.MessageID); err != nil {
+		if err := s.sendChannelMessage(binding.ChannelID, req.Content, ""); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}

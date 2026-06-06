@@ -25,23 +25,39 @@ export {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
-export {
-	PiArchiveEnforcement,
-	PiArchiveWriter,
-	SessionArchiveDefaults,
-	createSessionArchiveRuntime,
-	type PiArchiveEvent,
-	type PiSessionEnvelope,
-	type ResolvedSessionArchiveConfig,
-	type SessionArchiveConfig,
-	type SessionArchiveEventType,
-	type SessionArchiveRedactMode,
-	type SessionArchiveRole,
-	type SessionArchiveRuntime,
-	resolveSessionArchiveConfig,
-} from "./session-archive.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
+export {
+	createDiscordHeartbeatEvent,
+	createDiscordJsTransportClient,
+	createDiscordSessionEnvelope,
+	createDiscordTransport,
+	type DiscordActionPlan,
+	type DiscordActionType,
+	type DiscordClientIdentity,
+	type DiscordDirective,
+	type DiscordDirectiveType,
+	type DiscordInboundEvent,
+	type DiscordInboundEventType,
+	type DiscordSessionEnvelope,
+	type DiscordTransport,
+	type DiscordTransportClientAdapter,
+	type DiscordTransportConfig,
+	type DiscordTransportDefaults,
+	type DiscordTransportMessageLike,
+	type DiscordTransportReactionLike,
+	type DiscordTransportSessionLike,
+	type DiscordTransportState,
+	getDiscordTransportDefaults,
+	normalizeDiscordMessage,
+	normalizeDiscordReaction,
+	normalizeDiscordReadyEvent,
+	parseDiscordDirective,
+	planDiscordActions,
+	type ResolvedDiscordTransportConfig,
+	resolveDiscordToken,
+	resolveDiscordTransportConfig,
+} from "./discord-transport.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 // Extensions system
 export {
@@ -89,4 +105,19 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	createSessionArchiveRuntime,
+	PiArchiveEnforcement,
+	type PiArchiveEvent,
+	PiArchiveWriter,
+	type PiSessionEnvelope,
+	type ResolvedSessionArchiveConfig,
+	resolveSessionArchiveConfig,
+	type SessionArchiveConfig,
+	SessionArchiveDefaults,
+	type SessionArchiveEventType,
+	type SessionArchiveRedactMode,
+	type SessionArchiveRole,
+	type SessionArchiveRuntime,
+} from "./session-archive.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";

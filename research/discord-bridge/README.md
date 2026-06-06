@@ -45,6 +45,30 @@ from the `research/agent-rpc` Go module, or an equivalent `agent-rpc --bridge` b
 
 The bridge remains the control plane. Pi RPC remains the agent-side upstream path.
 
+### How attachments are presented to `agent-rpc`
+
+When a Discord message includes attachments, the bridge saves them under:
+
+```bash
+~/.pi/discord-bridge/downloads/
+```
+
+and includes them in the bridge event delivered to `agent-rpc`.
+
+For Pi-backed agents, the bridge currently formats inbound work into a text block like:
+
+```text
+[discord-bridge]
+Author: serenitynow67676
+Channel: 1504560627325079642
+Timestamp: 2026-06-06T13:33:23Z
+Attachments:
+- image.png (/home/easter/.pi/discord-bridge/downloads/1504560627325079642/1512811645787963592_image.png)
+Message:
+```
+
+This means the agent learns about attachments from the `Attachments:` section and can inspect the saved local file path directly.
+
 ## Runtime layout
 
 Local runtime state lives under:
@@ -95,12 +119,6 @@ export DISCORD_BRIDGE_DEFAULT_GUILD_ID=1478102509330497721
 export DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS=1504560627325079642,1488999734944202802
 export DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true
 export DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX=room
-```
-
-If explicit channel settings are omitted, the bridge will infer enabled assignable Discord rooms from:
-
-```bash
-~/.openclaw/openclaw.json
 ```
 
 ## Running the bridge as a user service

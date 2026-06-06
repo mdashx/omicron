@@ -10,7 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,7 +61,6 @@ type Config struct {
 	AvailableModels          []ModelOption `json:"availableModels,omitempty"`
 	AutoStartEnabledChannels bool          `json:"autoStartEnabledChannels,omitempty"`
 	AutoStartAgentPrefix     string        `json:"autoStartAgentPrefix,omitempty"`
-	OpenClawConfigPath       string        `json:"openClawConfigPath,omitempty"`
 	DryRun                   bool          `json:"dryRun"`
 }
 
@@ -85,7 +85,6 @@ func LoadConfig() (Config, error) {
 		AdminUserIDs:             splitCSV(os.Getenv("DISCORD_BRIDGE_ADMIN_USER_IDS")),
 		AutoStartEnabledChannels: envOrBool("DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS", false),
 		AutoStartAgentPrefix:     envOr("DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX", "room"),
-		OpenClawConfigPath:       expandPath(envOr("DISCORD_BRIDGE_OPENCLAW_CONFIG", "~/.openclaw/openclaw.json")),
 		DryRun:                   envOrBool("DISCORD_BRIDGE_DRY_RUN", false),
 	}
 	if path := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_CONFIG")); path != "" {
@@ -102,8 +101,6 @@ func LoadConfig() (Config, error) {
 	cfg.DownloadsRoot = expandPath(cfg.DownloadsRoot)
 	cfg.AuditPath = expandPath(cfg.AuditPath)
 	cfg.StatePath = expandPath(cfg.StatePath)
-	cfg.OpenClawConfigPath = expandPath(cfg.OpenClawConfigPath)
-	cfg.applyAutoAssignmentDefaults()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -132,92 +129,19 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func (c *Config) applyAutoAssignmentDefaults() {
-	if c.DefaultGuildID != "" && len(c.AssignableChannelIDs) > 0 {
-		return
-	}
-	type channelEntry struct {
-		Enabled bool `json:"enabled"`
-	}
-	type guildEntry struct {
-		Users    []string                `json:"users"`
-		Channels map[string]channelEntry `json:"channels"`
-	}
-	type discordCfg struct {
-		Guilds map[string]guildEntry `json:"guilds"`
-	}
-	type modelEntry struct {
-		Alias string `json:"alias"`
-	}
-	type openClawCfg struct {
-		Agents struct {
-			Defaults struct {
-				Models map[string]modelEntry `json:"models"`
-			} `json:"defaults"`
-		} `json:"agents"`
-		Channels struct {
-			Discord discordCfg `json:"discord"`
-		} `json:"channels"`
-	}
-	raw, err := os.ReadFile(c.OpenClawConfigPath)
-	if err != nil {
-		return
-	}
-	var oc openClawCfg
-	if json.Unmarshal(raw, &oc) != nil {
-		return
-	}
-	if c.DefaultGuildID == "" {
-		for guildID := range oc.Channels.Discord.Guilds {
-			c.DefaultGuildID = guildID
-			break
-		}
-	}
-	if len(c.AssignableChannelIDs) == 0 && c.DefaultGuildID != "" {
-		for channelID, entry := range oc.Channels.Discord.Guilds[c.DefaultGuildID].Channels {
-			if entry.Enabled {
-				c.AssignableChannelIDs = append(c.AssignableChannelIDs, channelID)
-			}
-		}
-	}
-	if len(c.AdminUserIDs) == 0 {
-		seen := map[string]bool{}
-		for guildID, guild := range oc.Channels.Discord.Guilds {
-			if c.DefaultGuildID != "" && guildID != c.DefaultGuildID {
-				continue
-			}
-			for _, userID := range guild.Users {
-				userID = strings.TrimSpace(userID)
-				if userID != "" && !seen[userID] {
-					seen[userID] = true
-					c.AdminUserIDs = append(c.AdminUserIDs, userID)
-				}
-			}
-		}
-	}
-	if len(c.AvailableModels) == 0 {
-		for id, entry := range oc.Agents.Defaults.Models {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			c.AvailableModels = append(c.AvailableModels, ModelOption{ID: id, Alias: strings.TrimSpace(entry.Alias)})
-		}
-		slices.SortFunc(c.AvailableModels, func(a, b ModelOption) int {
-			return strings.Compare(a.ID, b.ID)
-		})
-	}
-}
-
 type Envelope struct {
-	BridgeID    string    `json:"bridgeId"`
-	StartedAt   time.Time `json:"startedAt"`
-	Host        string    `json:"host"`
-	BotUserID   string    `json:"botUserId,omitempty"`
-	BotTag      string    `json:"botTag,omitempty"`
-	Transport   string    `json:"transport"`
-	Version     string    `json:"version"`
-	StorageRoot string    `json:"storageRoot"`
+	BridgeID      string    `json:"bridgeId"`
+	StartedAt     time.Time `json:"startedAt"`
+	Host          string    `json:"host"`
+	BotUserID     string    `json:"botUserId,omitempty"`
+	BotTag        string    `json:"botTag,omitempty"`
+	Transport     string    `json:"transport"`
+	Version       string    `json:"version"`
+	BuildCommit   string    `json:"buildCommit,omitempty"`
+	BuildTime     string    `json:"buildTime,omitempty"`
+	BuildGo       string    `json:"buildGo,omitempty"`
+	BuildModified string    `json:"buildModified,omitempty"`
+	StorageRoot   string    `json:"storageRoot"`
 }
 
 type Binding struct {
@@ -334,12 +258,16 @@ func NewBridgeService(cfg Config) (*BridgeService, error) {
 		pendingModelPickers: map[string]pendingModelPicker{},
 		pickerModels:        append([]ModelOption(nil), cfg.AvailableModels...),
 		envelope: Envelope{
-			BridgeID:    cfg.BridgeID,
-			StartedAt:   time.Now().UTC(),
-			Host:        cfg.Host,
-			Transport:   "discord",
-			Version:     "v0",
-			StorageRoot: cfg.StorageRoot,
+			BridgeID:      cfg.BridgeID,
+			StartedAt:     time.Now().UTC(),
+			Host:          cfg.Host,
+			Transport:     "discord",
+			Version:       buildVersion(),
+			BuildCommit:   buildCommit(),
+			BuildTime:     buildTime(),
+			BuildGo:       runtime.Version(),
+			BuildModified: buildModified(),
+			StorageRoot:   cfg.StorageRoot,
 		},
 	}
 	return s, nil
@@ -535,6 +463,12 @@ func envOrBool(key string, fallback bool) bool {
 	return fallback
 }
 
+var (
+	versionOverride string
+	commitOverride  string
+	buildTimeValue  string
+)
+
 func splitCSV(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -549,4 +483,60 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return result
+}
+
+func buildVersion() string {
+	if strings.TrimSpace(versionOverride) != "" {
+		return strings.TrimSpace(versionOverride)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info != nil && strings.TrimSpace(info.Main.Version) != "" && info.Main.Version != "(devel)" {
+		return strings.TrimSpace(info.Main.Version)
+	}
+	if commit := buildCommit(); commit != "" {
+		return "dev-" + commit
+	}
+	return "dev"
+}
+
+func buildCommit() string {
+	if strings.TrimSpace(commitOverride) != "" {
+		return strings.TrimSpace(commitOverride)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info != nil {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				value := strings.TrimSpace(setting.Value)
+				if len(value) > 12 {
+					value = value[:12]
+				}
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func buildTime() string {
+	if strings.TrimSpace(buildTimeValue) != "" {
+		return strings.TrimSpace(buildTimeValue)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info != nil {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.time" {
+				return strings.TrimSpace(setting.Value)
+			}
+		}
+	}
+	return ""
+}
+
+func buildModified() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info != nil {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.modified" {
+				return strings.TrimSpace(setting.Value)
+			}
+		}
+	}
+	return ""
 }

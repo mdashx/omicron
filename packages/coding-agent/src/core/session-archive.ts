@@ -2,11 +2,17 @@ import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { AgentSessionEvent } from "./agent-session.ts";
-import { VERSION, getAgentDir } from "../config.ts";
+import { getAgentDir, VERSION } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
+import type { AgentSessionEvent } from "./agent-session.ts";
 
-export type SessionArchiveEventType = "session_start" | "message" | "tool_call" | "tool_result" | "session_end" | "error";
+export type SessionArchiveEventType =
+	| "session_start"
+	| "message"
+	| "tool_call"
+	| "tool_result"
+	| "session_end"
+	| "error";
 export type SessionArchiveRole = "user" | "assistant" | "tool" | "system";
 export type SessionArchiveRedactMode = "minimal" | "strict";
 
@@ -86,7 +92,10 @@ function pad2(value: number): string {
 
 function createSessionId(): string {
 	const now = new Date();
-	const iso = now.toISOString().replace(/\.\d{3}Z$/, "Z").replace(/:/g, "-");
+	const iso = now
+		.toISOString()
+		.replace(/\.\d{3}Z$/, "Z")
+		.replace(/:/g, "-");
 	return `${iso}_${randomBytes(2).toString("hex")}`;
 }
 
@@ -193,7 +202,8 @@ function resolveArchiveEnvOverrides(): SessionArchiveConfig {
 	if (enabled !== undefined) overrides.enabled = enabled;
 	if (process.env.PI_SESSION_ARCHIVE_REPO_PATH) overrides.repoPath = process.env.PI_SESSION_ARCHIVE_REPO_PATH;
 	if (process.env.PI_SESSION_ARCHIVE_FILE_LAYOUT) overrides.fileLayout = process.env.PI_SESSION_ARCHIVE_FILE_LAYOUT;
-	if (process.env.PI_SESSION_ARCHIVE_OUTPUT_FORMAT) overrides.outputFormat = process.env.PI_SESSION_ARCHIVE_OUTPUT_FORMAT;
+	if (process.env.PI_SESSION_ARCHIVE_OUTPUT_FORMAT)
+		overrides.outputFormat = process.env.PI_SESSION_ARCHIVE_OUTPUT_FORMAT;
 	const captureEvents = parseCaptureEvents(process.env.PI_SESSION_ARCHIVE_CAPTURE_EVENTS);
 	if (captureEvents !== undefined) overrides.captureEvents = captureEvents;
 	if (process.env.PI_SESSION_ARCHIVE_REDACT_MODE) {
@@ -222,11 +232,9 @@ export const PiArchiveEnforcement = {
 	llmInPath: false,
 } as const;
 
-export function resolveSessionArchiveConfig(options: {
-	config?: SessionArchiveConfig;
-	agentDir?: string;
-	cwd?: string;
-} = {}): ResolvedSessionArchiveConfig {
+export function resolveSessionArchiveConfig(
+	options: { config?: SessionArchiveConfig; agentDir?: string; cwd?: string } = {},
+): ResolvedSessionArchiveConfig {
 	const agentDir = resolvePath(options.agentDir ?? getAgentDir());
 	const defaults: ResolvedSessionArchiveConfig = {
 		enabled: SessionArchiveDefaults.enabled,
@@ -306,11 +314,7 @@ export class PiArchiveWriter {
 	readonly appendOnly = true;
 	flushed = true;
 
-	constructor(
-		config: ResolvedSessionArchiveConfig,
-		envelope: PiSessionEnvelope,
-		private readonly startReason: string,
-	) {
+	constructor(config: ResolvedSessionArchiveConfig, envelope: PiSessionEnvelope, startReason: string) {
 		this.config = config;
 		this.envelope = envelope;
 		this.filePath = resolveArchiveFilePath(config, envelope);
@@ -387,12 +391,17 @@ export class SessionArchiveRuntime {
 	readonly config: ResolvedSessionArchiveConfig;
 	readonly envelope: PiSessionEnvelope;
 	readonly filePath?: string;
+	private readonly session: { subscribe(listener: (event: AgentSessionEvent) => void): () => void };
 
 	constructor(
-		private readonly session: { subscribe(listener: (event: AgentSessionEvent) => void): () => void },
+		session: { subscribe(listener: (event: AgentSessionEvent) => void): () => void },
 		options: SessionArchiveRuntimeOptions,
 	) {
-		this.config = resolveSessionArchiveConfig({ config: options.config, agentDir: options.agentDir ?? getAgentDir() });
+		this.session = session;
+		this.config = resolveSessionArchiveConfig({
+			config: options.config,
+			agentDir: options.agentDir ?? getAgentDir(),
+		});
 		this.envelope = buildEnvelope(options, createSessionId());
 		if (!this.config.enabled) {
 			return;
@@ -418,7 +427,7 @@ export class SessionArchiveRuntime {
 					break;
 				case "message_end":
 					if (event.message.role === "assistant") {
-						const assistant = event.message as Record<string, unknown>;
+						const assistant = event.message as unknown as Record<string, unknown>;
 						if ((assistant.stopReason as string | undefined) === "error") {
 							if (this.config.captureEvents.includes("error")) {
 								this.writer.appendRecord({

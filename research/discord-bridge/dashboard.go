@@ -544,6 +544,7 @@ const uiTemplateSource = `
   <header>
     <h1>Discord Bridge</h1>
     <div class="muted">Bridge ID {{.Envelope.BridgeID}} · Host {{.Envelope.Host}} · Dry run {{.DryRun}}</div>
+    <div class="muted">Build {{.Envelope.Version}}{{if .Envelope.BuildCommit}} · Commit {{.Envelope.BuildCommit}}{{end}}{{if .Envelope.BuildTime}} · Built {{.Envelope.BuildTime}}{{end}}{{if .Envelope.BuildGo}} · {{.Envelope.BuildGo}}{{end}}{{if .Envelope.BuildModified}} · modified={{.Envelope.BuildModified}}{{end}}</div>
     <nav>
       <a href="/" {{if eq .CurrentPath "/"}}class="active"{{end}}>Overview</a>
       <a href="/managed-agents" {{if eq .CurrentPath "/managed-agents"}}class="active"{{end}}>Managed Agents</a>
@@ -649,6 +650,14 @@ const uiTemplateSource = `
     <div><strong>Healthy joined</strong><br>{{.Overview.HealthyJoined}}</div>
     <div><strong>Queued events</strong><br>{{.Overview.QueuedEvents}}</div>
     <div><strong>Needs attention</strong><br>{{.Overview.NeedsAttention}}</div>
+    <div><strong>Build</strong><br><code>{{.Envelope.Version}}</code></div>
+    <div><strong>Commit</strong><br><code>{{if .Envelope.BuildCommit}}{{.Envelope.BuildCommit}}{{else}}unknown{{end}}</code></div>
+  </div>
+  <div class="actions" style="margin-top:16px;">
+    <form class="inline" method="post" action="/admin/restart" onsubmit="return confirm('Restart the bridge, stop all launched agents, and clear runtime session state?');">
+      <button>Restart bridge</button>
+    </form>
+    <span class="muted">Stops launched agents, clears runtime session state, then re-execs the bridge process.</span>
   </div>
 </div>
 {{end}}
