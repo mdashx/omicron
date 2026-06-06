@@ -420,7 +420,51 @@ where
 
 ---
 
-## 10. `DiscordBridgeAuditLog`
+## 10. `DiscordBridgeWholesaleMemory`
+
+### Prose Spec
+
+In addition to per-agent automation, the bridge should provide wholesale, bridge-wide persistence and recall features.
+
+At minimum, it should automatically keep local logs of all chats and attachments regardless of which agent is currently bound.
+
+This gives the bridge a durable memory layer and lets agents join later without losing the channel history.
+
+### Z Spec
+
+```text
+DiscordBridgeWholesaleMemory
+  chatLogRoot: seq CHAR
+  attachmentLogRoot: seq CHAR
+  enabled: 𝔹
+where
+  chatLogRoot ≠ ⟨⟩
+  attachmentLogRoot ≠ ⟨⟩
+  enabled = true
+```
+
+### Data examples
+
+```json
+{
+  "enabled": true,
+  "chatLogRoot": "~/.pi/discord-bridge/logs/chats",
+  "attachmentLogRoot": "~/.pi/discord-bridge/logs/attachments"
+}
+```
+
+### Implementation suggestions / specifics
+
+- Log every inbound and outbound chat message locally.
+- Persist attachment metadata and downloaded file references locally.
+- Keep these logs bridge-owned and independent of any single agent session.
+- Make the local log available for replay, search, audit, and delayed agent join.
+- Preserve ordering and channel context so later agents can reconstruct what happened.
+- Apply the same behavior across all agents and models.
+
+---
+
+## 11. `DiscordBridgeAuditLog`
 
 ### Prose Spec
 
@@ -457,7 +501,7 @@ where
 
 ---
 
-## 11. `DiscordBridgeInvariants`
+## 12. `DiscordBridgeInvariants`
 
 ### Prose Spec
 
