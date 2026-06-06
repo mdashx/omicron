@@ -311,6 +311,7 @@ type BridgeService struct {
 	queues              map[string][]InboundEvent
 	launchedAgents      map[string]LaunchedAgent
 	pendingModelPickers map[string]pendingModelPicker
+	pickerModels        []ModelOption
 	mu                  sync.Mutex
 }
 
@@ -331,6 +332,7 @@ func NewBridgeService(cfg Config) (*BridgeService, error) {
 		queues:              map[string][]InboundEvent{},
 		launchedAgents:      map[string]LaunchedAgent{},
 		pendingModelPickers: map[string]pendingModelPicker{},
+		pickerModels:        append([]ModelOption(nil), cfg.AvailableModels...),
 		envelope: Envelope{
 			BridgeID:    cfg.BridgeID,
 			StartedAt:   time.Now().UTC(),

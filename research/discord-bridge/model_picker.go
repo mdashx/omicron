@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -150,12 +153,13 @@ func (s *BridgeService) openModelPickerInteraction(i *discordgo.InteractionCreat
 }
 
 func (s *BridgeService) buildModelPicker() (string, []discordgo.MessageComponent, error) {
-	if len(s.cfg.AvailableModels) == 0 {
+	models := s.getPickerModels()
+	if len(models) == 0 {
 		return "", nil, fmt.Errorf("no available models configured for picker")
 	}
 	customID := fmt.Sprintf("model-picker:%d", time.Now().UnixNano())
-	options := make([]discordgo.SelectMenuOption, 0, len(s.cfg.AvailableModels))
-	for _, model := range s.cfg.AvailableModels {
+	options := make([]discordgo.SelectMenuOption, 0, len(models))
+	for _, model := range models {
 		label := model.ID
 		if strings.TrimSpace(model.Alias) != "" {
 			label = model.Alias
@@ -172,6 +176,115 @@ func (s *BridgeService) buildModelPicker() (string, []discordgo.MessageComponent
 		}},
 	}
 	return customID, components, nil
+}
+
+func (s *BridgeService) getPickerModels() []ModelOption {
+	s.mu.Lock()
+	cached := append([]ModelOption(nil), s.pickerModels...)
+	s.mu.Unlock()
+	if len(cached) > 0 && hasCanonicalProviders(cached) {
+		return cached
+	}
+	live, err := loadPiAvailableModels()
+	if err == nil && len(live) > 0 {
+		s.mu.Lock()
+		s.pickerModels = append([]ModelOption(nil), live...)
+		s.mu.Unlock()
+		_ = s.appendAudit("bridge.model_picker.catalog_refreshed", map[string]any{"count": len(live), "source": "pi"})
+		return live
+	}
+	if len(cached) > 0 {
+		return cached
+	}
+	return append([]ModelOption(nil), s.cfg.AvailableModels...)
+}
+
+func hasCanonicalProviders(models []ModelOption) bool {
+	for _, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if strings.HasPrefix(id, "openai-codex/") || strings.HasPrefix(id, "anthropic/") || strings.HasPrefix(id, "xai/") {
+			return true
+		}
+	}
+	return false
+}
+
+func loadPiAvailableModels() ([]ModelOption, error) {
+	cmd := exec.Command("pi", "--mode", "rpc")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_, _ = cmd.Process.Wait()
+	}()
+	if _, err := fmt.Fprintln(stdin, `{"id":"picker-models","type":"get_available_models"}`); err != nil {
+		return nil, err
+	}
+	if err := stdin.Close(); err != nil {
+		return nil, err
+	}
+	type rpcEnvelope struct {
+		ID      string          `json:"id,omitempty"`
+		Type    string          `json:"type"`
+		Command string          `json:"command,omitempty"`
+		Success bool            `json:"success,omitempty"`
+		Error   string          `json:"error,omitempty"`
+		Data    json.RawMessage `json:"data,omitempty"`
+	}
+	type payload struct {
+		Models []struct {
+			Provider string `json:"provider"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+		} `json:"models"`
+	}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var env rpcEnvelope
+		if json.Unmarshal([]byte(line), &env) != nil {
+			continue
+		}
+		if env.Type != "response" || env.ID != "picker-models" || env.Command != "get_available_models" {
+			continue
+		}
+		if !env.Success {
+			return nil, fmt.Errorf("get_available_models failed: %s", env.Error)
+		}
+		var body payload
+		if err := json.Unmarshal(env.Data, &body); err != nil {
+			return nil, err
+		}
+		result := make([]ModelOption, 0, len(body.Models))
+		for _, model := range body.Models {
+			provider := strings.TrimSpace(model.Provider)
+			id := strings.TrimSpace(model.ID)
+			if provider == "" || id == "" {
+				continue
+			}
+			result = append(result, ModelOption{ID: provider + "/" + id, Alias: strings.TrimSpace(model.Name)})
+		}
+		return result, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("no get_available_models response from pi")
 }
 
 func (s *BridgeService) registerApplicationCommands() error {
