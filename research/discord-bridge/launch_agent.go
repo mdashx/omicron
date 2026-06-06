@@ -52,12 +52,17 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 	cmd := exec.Command(command)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	piSessionDir := filepath.Join(agentDir, "pi-sessions")
+	clientStateRoot := filepath.Join(agentDir, "client-state")
 	cmd.Env = append(os.Environ(),
 		"DISCORD_BRIDGE_AGENT_ID="+req.AgentID,
 		"DISCORD_BRIDGE_CREDS_REF=local-session",
 		"DISCORD_BRIDGE_URL=http://127.0.0.1:19444",
 		"DISCORD_BRIDGE_GUILD_ID="+requestedGuildID,
 		"DISCORD_BRIDGE_CHANNEL_ID="+requestedChannelID,
+		"DISCORD_BRIDGE_CLIENT_STATE_ROOT="+clientStateRoot,
+		"DISCORD_BRIDGE_PI_SESSION_ROOT="+piSessionDir,
+		"PI_CODING_AGENT_SESSION_DIR="+piSessionDir,
 		"DISCORD_BRIDGE_PTY_INPUT_LOG="+filepath.Join(agentDir, "pty-input.log"),
 		"DISCORD_BRIDGE_PTY_OUTPUT_LOG="+filepath.Join(agentDir, "pty-output.log"),
 	)
