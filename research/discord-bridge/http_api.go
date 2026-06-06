@@ -30,11 +30,12 @@ type completeRequest struct {
 }
 
 type launchAgentRequest struct {
-	AgentID   string   `json:"agentId"`
-	GuildID   string   `json:"guildId"`
-	ChannelID string   `json:"channelId"`
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
+	AgentID    string   `json:"agentId"`
+	GuildID    string   `json:"guildId"`
+	ChannelID  string   `json:"channelId"`
+	Command    string   `json:"command"`
+	Args       []string `json:"args,omitempty"`
+	WorkingDir string   `json:"workingDir,omitempty"`
 }
 
 type stopAgentRequest struct {
@@ -42,7 +43,15 @@ type stopAgentRequest struct {
 }
 
 func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/", s.handleDashboard)
+	mux.HandleFunc("/", s.handleHomePage)
+	mux.HandleFunc("/managed-agents", s.handleManagedAgentsPage)
+	mux.HandleFunc("/managed-agents/", s.handleManagedAgentsUI)
+	mux.HandleFunc("/bindings", s.handleBindingsPage)
+	mux.HandleFunc("/activity", s.handleActivityPage)
+	mux.HandleFunc("/partials/overview", s.handleOverviewPartial)
+	mux.HandleFunc("/partials/managed-agents-table", s.handleManagedAgentsTablePartial)
+	mux.HandleFunc("/partials/bindings-table", s.handleBindingsTablePartial)
+	mux.HandleFunc("/partials/activity-feed", s.handleActivityFeedPartial)
 	mux.HandleFunc("/api/dashboard", s.handleDashboardData)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/join", s.handleJoin)
@@ -53,15 +62,6 @@ func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
 
 func (s *BridgeService) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.dashboardSnapshot())
-}
-
-func (s *BridgeService) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(renderDashboardHTML()))
 }
 
 func (s *BridgeService) handleDashboardData(w http.ResponseWriter, _ *http.Request) {
@@ -115,6 +115,15 @@ func (s *BridgeService) handleJoin(w http.ResponseWriter, r *http.Request) {
 		Active:    true,
 	}
 	s.state.Bindings[req.AgentID] = binding
+	managed := s.upsertManagedAgentLocked(ManagedAgent{
+		AgentID:            req.AgentID,
+		CredsRef:           req.CredsRef,
+		DesiredState:       "running",
+		RequestedGuildID:   requestedGuildID,
+		RequestedChannelID: requestedChannelID,
+		LastJoinAt:         binding.JoinedAt,
+	})
+	s.state.ManagedAgents[req.AgentID] = managed
 	if err := s.saveStateLocked(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -249,6 +258,13 @@ func (s *BridgeService) handleAgentComplete(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
+	s.mu.Lock()
+	managed := s.upsertManagedAgentLocked(ManagedAgent{AgentID: agentID, DesiredState: "running"})
+	managed.LastCompletionAt = time.Now().UTC()
+	managed.LastError = ""
+	s.state.ManagedAgents[agentID] = managed
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
 	_ = s.appendAudit("agent.complete", map[string]any{"agentId": agentID, "messageId": req.MessageID, "finalReaction": req.FinalReaction})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

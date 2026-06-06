@@ -97,6 +97,22 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 	}
 	s.mu.Lock()
 	s.launchedAgents[req.AgentID] = launched
+	managed := s.upsertManagedAgentLocked(ManagedAgent{
+		AgentID:             req.AgentID,
+		CredsRef:            "local-session",
+		DesiredState:        "running",
+		Command:             spec.Command,
+		Args:                append([]string(nil), spec.Args...),
+		WorkingDir:          spec.WorkingDir,
+		RequestedGuildID:    requestedGuildID,
+		RequestedChannelID:  requestedChannelID,
+		LastLaunchedAt:      launched.StartedAt,
+		LastProcessPID:      launched.PID,
+		LastObservedProcess: "running",
+		LastError:           "",
+	})
+	s.state.ManagedAgents[req.AgentID] = managed
+	_ = s.saveStateLocked()
 	s.mu.Unlock()
 	_ = s.appendAudit("agent.launch", launched)
 	go func(agentID string, process *os.Process) {
@@ -111,6 +127,13 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 			launched.State = fmt.Sprintf("exited:%d", state.ExitCode())
 		}
 		s.launchedAgents[agentID] = launched
+		managed := s.upsertManagedAgentLocked(ManagedAgent{AgentID: agentID, DesiredState: "running"})
+		managed.LastObservedProcess = launched.State
+		if err != nil {
+			managed.LastError = err.Error()
+		}
+		s.state.ManagedAgents[agentID] = managed
+		_ = s.saveStateLocked()
 		s.mu.Unlock()
 		_ = s.appendAudit("agent.launch.exit", map[string]any{"agentId": agentID, "state": launched.State})
 	}(req.AgentID, cmd.Process)
@@ -120,20 +143,24 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 func resolveLaunchSpec(req launchAgentRequest, repoRoot string) (launchSpec, error) {
 	command := strings.TrimSpace(req.Command)
 	args := compactArgs(req.Args)
+	workingDir := strings.TrimSpace(req.WorkingDir)
 	if command == "" {
 		if repoRoot != "" {
 			return launchSpec{
 				Command:    "go",
 				Args:       []string{"run", "./research/agent-rpc/cmd/agent-rpc", "--bridge"},
-				WorkingDir: repoRoot,
+				WorkingDir: firstNonEmpty(workingDir, repoRoot),
 			}, nil
 		}
-		return launchSpec{Command: "agent-rpc", Args: []string{"--bridge"}}, nil
+		return launchSpec{Command: "agent-rpc", Args: []string{"--bridge"}, WorkingDir: workingDir}, nil
 	}
 	if command == "agent-rpc" && len(args) == 0 {
 		args = []string{"--bridge"}
 	}
-	return launchSpec{Command: command, Args: args, WorkingDir: repoRootIfGoRun(command, args, repoRoot)}, nil
+	if workingDir == "" {
+		workingDir = repoRootIfGoRun(command, args, repoRoot)
+	}
+	return launchSpec{Command: command, Args: args, WorkingDir: workingDir}, nil
 }
 
 func compactArgs(args []string) []string {
@@ -191,6 +218,11 @@ func (s *BridgeService) stopAgent(agentID string) (LaunchedAgent, error) {
 	launched.State = "stopped"
 	s.mu.Lock()
 	s.launchedAgents[agentID] = launched
+	managed := s.upsertManagedAgentLocked(ManagedAgent{AgentID: agentID, DesiredState: "stopped"})
+	managed.LastObservedProcess = "stopped"
+	managed.LastStoppedAt = time.Now().UTC()
+	s.state.ManagedAgents[agentID] = managed
+	_ = s.saveStateLocked()
 	s.mu.Unlock()
 	_ = s.appendAudit("agent.stop", map[string]any{"agentId": agentID, "pid": launched.PID})
 	return launched, nil

@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"html/template"
+	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -17,85 +19,380 @@ type channelOption struct {
 	Label   string `json:"label"`
 }
 
-type dashboardData struct {
-	Envelope                Envelope                 `json:"envelope"`
-	Bindings                map[string]Binding       `json:"bindings"`
-	QueueSizes              map[string]int           `json:"queueSizes"`
-	DryRun                  bool                     `json:"dryRun"`
-	RecentChats             []chatLogRecord          `json:"recentChats"`
-	RecentAttachments       []AttachmentRecord       `json:"recentAttachments"`
-	AttachmentCount         int                      `json:"attachmentCount"`
-	AuditTail               []auditRecord            `json:"auditTail"`
-	ManagedReactions        map[string]string        `json:"managedReactions"`
-	StatusReactions         []string                 `json:"statusReactions"`
-	FinalChoices            []string                 `json:"finalReactionChoices"`
-	AssignableChannelIDs    []string                 `json:"assignableChannelIds"`
-	AssignableChannels      []channelOption          `json:"assignableChannels"`
-	DefaultGuildID          string                   `json:"defaultGuildId"`
-	LaunchedAgents          map[string]LaunchedAgent `json:"launchedAgents"`
-	LaunchedAgentLogs       map[string][]string      `json:"launchedAgentLogs"`
-	LaunchedAgentPTYInputs  map[string][]string      `json:"launchedAgentPtyInputs"`
-	LaunchedAgentPTYOutputs map[string][]string      `json:"launchedAgentPtyOutputs"`
-	Now                     time.Time                `json:"now"`
+type bindingView struct {
+	AgentID        string
+	GuildID        string
+	ChannelID      string
+	ChannelLabel   string
+	State          string
+	QueueDepth     int
+	DesiredAgent   string
+	DesiredChannel string
+	LastJoinedAt   time.Time
+	NeedsAttention bool
 }
+
+type activityItem struct {
+	Timestamp time.Time
+	Type      string
+	Summary   string
+}
+
+type dashboardData struct {
+	Overview           OverviewStats      `json:"overview"`
+	ManagedAgents      []ManagedAgentView `json:"managedAgents"`
+	Bindings           []bindingView      `json:"bindings"`
+	Activity           []activityItem     `json:"activity"`
+	AssignableChannels []channelOption    `json:"assignableChannels"`
+	DefaultGuildID     string             `json:"defaultGuildId"`
+	Envelope           Envelope           `json:"envelope"`
+	DryRun             bool               `json:"dryRun"`
+	Now                time.Time          `json:"now"`
+}
+
+type pageData struct {
+	Title              string
+	CurrentPath        string
+	Overview           OverviewStats
+	ManagedAgents      []ManagedAgentView
+	Bindings           []bindingView
+	Activity           []activityItem
+	AssignableChannels []channelOption
+	DefaultGuildID     string
+	Envelope           Envelope
+	DryRun             bool
+	Now                time.Time
+	Agent              *ManagedAgentView
+	RecentLogs         []string
+}
+
+var uiTemplates = template.Must(template.New("base").Funcs(template.FuncMap{
+	"fmtTime": func(t time.Time) string {
+		if t.IsZero() {
+			return "—"
+		}
+		return t.Local().Format("2006-01-02 15:04:05")
+	},
+	"since": func(t time.Time) string {
+		if t.IsZero() {
+			return "—"
+		}
+		return time.Since(t).Round(time.Second).String() + " ago"
+	},
+	"join": strings.Join,
+}).Parse(uiTemplateSource))
 
 func (s *BridgeService) dashboardSnapshot() dashboardData {
 	s.mu.Lock()
-	bindings := make(map[string]Binding, len(s.state.Bindings))
-	for k, v := range s.state.Bindings {
-		bindings[k] = v
-	}
-	queueSizes := make(map[string]int, len(s.queues))
-	for k, v := range s.queues {
-		queueSizes[k] = len(v)
-	}
-	reactions := make(map[string]string, len(s.state.ManagedReactions))
-	for k, v := range s.state.ManagedReactions {
-		reactions[k] = v
-	}
-	launchedAgents := make(map[string]LaunchedAgent, len(s.launchedAgents))
-	for k, v := range s.launchedAgents {
-		launchedAgents[k] = v
-	}
 	envelope := s.envelope
 	dryRun := s.cfg.DryRun
-	statusReactions := append([]string(nil), s.cfg.StatusReactions...)
-	finalChoices := append([]string(nil), s.cfg.FinalReactionChoices...)
+	defaultGuildID := s.cfg.DefaultGuildID
+	assignableChannelIDs := append([]string(nil), s.cfg.AssignableChannelIDs...)
+	s.mu.Unlock()
+	return dashboardData{
+		Overview:           s.overviewStats(),
+		ManagedAgents:      s.managedAgentViews(),
+		Bindings:           s.bindingViews(),
+		Activity:           s.activityItems(30),
+		AssignableChannels: s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs),
+		DefaultGuildID:     defaultGuildID,
+		Envelope:           envelope,
+		DryRun:             dryRun,
+		Now:                time.Now().UTC(),
+	}
+}
+
+func (s *BridgeService) pageData(title, currentPath string) pageData {
+	snapshot := s.dashboardSnapshot()
+	return pageData{
+		Title:              title,
+		CurrentPath:        currentPath,
+		Overview:           snapshot.Overview,
+		ManagedAgents:      snapshot.ManagedAgents,
+		Bindings:           snapshot.Bindings,
+		Activity:           snapshot.Activity,
+		AssignableChannels: snapshot.AssignableChannels,
+		DefaultGuildID:     snapshot.DefaultGuildID,
+		Envelope:           snapshot.Envelope,
+		DryRun:             snapshot.DryRun,
+		Now:                snapshot.Now,
+	}
+}
+
+func (s *BridgeService) handleHomePage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	data := s.pageData("Discord Bridge Overview", "/")
+	s.renderHTML(w, "page_overview", data)
+}
+
+func (s *BridgeService) handleManagedAgentsPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleManagedAgentCreate(w, r)
+		return
+	}
+	data := s.pageData("Managed Agents", "/managed-agents")
+	s.renderHTML(w, "page_agents", data)
+}
+
+func (s *BridgeService) handleBindingsPage(w http.ResponseWriter, r *http.Request) {
+	data := s.pageData("Bindings", "/bindings")
+	s.renderHTML(w, "page_bindings", data)
+}
+
+func (s *BridgeService) handleActivityPage(w http.ResponseWriter, r *http.Request) {
+	data := s.pageData("Activity", "/activity")
+	s.renderHTML(w, "page_activity", data)
+}
+
+func (s *BridgeService) handleOverviewPartial(w http.ResponseWriter, _ *http.Request) {
+	data := s.pageData("Discord Bridge Overview", "/")
+	s.renderHTML(w, "partial_overview", data)
+}
+
+func (s *BridgeService) handleManagedAgentsTablePartial(w http.ResponseWriter, _ *http.Request) {
+	data := s.pageData("Managed Agents", "/managed-agents")
+	s.renderHTML(w, "partial_agents_table", data)
+}
+
+func (s *BridgeService) handleBindingsTablePartial(w http.ResponseWriter, _ *http.Request) {
+	data := s.pageData("Bindings", "/bindings")
+	s.renderHTML(w, "partial_bindings_table", data)
+}
+
+func (s *BridgeService) handleActivityFeedPartial(w http.ResponseWriter, _ *http.Request) {
+	data := s.pageData("Activity", "/activity")
+	s.renderHTML(w, "partial_activity_feed", data)
+}
+
+func (s *BridgeService) handleManagedAgentsUI(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/managed-agents/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	agentID := parts[0]
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		view, ok := s.findManagedAgentView(agentID)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		data := s.pageData("Managed Agent "+agentID, "/managed-agents")
+		data.Agent = &view
+		data.RecentLogs = readAgentLogSince(view.LogPath, maxTime(view.LastActivityAt.Add(-5*time.Minute), time.Now().Add(-1*time.Hour)), 40)
+		s.renderHTML(w, "page_agent_detail", data)
+		return
+	}
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	s.handleManagedAgentAction(w, r, agentID, parts[1])
+}
+
+func (s *BridgeService) handleManagedAgentCreate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	agentID := strings.TrimSpace(r.FormValue("agentId"))
+	if agentID == "" {
+		http.Error(w, "agentId is required", http.StatusBadRequest)
+		return
+	}
+	args := splitArgs(r.FormValue("args"))
+	s.mu.Lock()
+	agent := s.upsertManagedAgentLocked(ManagedAgent{
+		AgentID:            agentID,
+		CredsRef:           firstNonEmpty(strings.TrimSpace(r.FormValue("credsRef")), "local-session"),
+		DesiredState:       firstNonEmpty(strings.TrimSpace(r.FormValue("desiredState")), "stopped"),
+		Command:            strings.TrimSpace(r.FormValue("command")),
+		Args:               args,
+		WorkingDir:         strings.TrimSpace(r.FormValue("workingDir")),
+		RequestedGuildID:   strings.TrimSpace(r.FormValue("guildId")),
+		RequestedChannelID: strings.TrimSpace(r.FormValue("channelId")),
+	})
+	s.state.ManagedAgents[agentID] = agent
+	err := s.saveStateLocked()
+	s.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = s.appendAudit("managed_agent.upsert", map[string]any{"agentId": agentID})
+	s.respondManagedAgentMutation(w, r)
+}
+
+func (s *BridgeService) handleManagedAgentAction(w http.ResponseWriter, r *http.Request, agentID, action string) {
+	s.mu.Lock()
+	agent, ok := s.state.ManagedAgents[agentID]
+	s.mu.Unlock()
+	if !ok {
+		http.Error(w, "managed agent not found", http.StatusNotFound)
+		return
+	}
+	switch action {
+	case "start":
+		_, err := s.launchAgent(launchAgentRequest{
+			AgentID:    agentID,
+			GuildID:    agent.RequestedGuildID,
+			ChannelID:  agent.RequestedChannelID,
+			Command:    agent.Command,
+			Args:       append([]string(nil), agent.Args...),
+			WorkingDir: agent.WorkingDir,
+		})
+		if err != nil {
+			s.recordManagedAgentError(agentID, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case "stop":
+		if _, err := s.stopAgent(agentID); err != nil {
+			s.recordManagedAgentError(agentID, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case "restart":
+		_, _ = s.stopAgent(agentID)
+		_, err := s.launchAgent(launchAgentRequest{
+			AgentID:    agentID,
+			GuildID:    agent.RequestedGuildID,
+			ChannelID:  agent.RequestedChannelID,
+			Command:    agent.Command,
+			Args:       append([]string(nil), agent.Args...),
+			WorkingDir: agent.WorkingDir,
+		})
+		if err != nil {
+			s.recordManagedAgentError(agentID, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	s.respondManagedAgentMutation(w, r)
+}
+
+func (s *BridgeService) respondManagedAgentMutation(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("HX-Request") != "true" {
+		http.Redirect(w, r, "/managed-agents", http.StatusSeeOther)
+		return
+	}
+	data := s.pageData("Managed Agents", "/managed-agents")
+	s.renderHTML(w, "partial_agents_table", data)
+}
+
+func (s *BridgeService) recordManagedAgentError(agentID string, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	managed := s.upsertManagedAgentLocked(ManagedAgent{AgentID: agentID})
+	managed.LastError = err.Error()
+	s.state.ManagedAgents[agentID] = managed
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
+}
+
+func (s *BridgeService) bindingViews() []bindingView {
+	views := s.managedAgentViews()
+	viewByID := map[string]ManagedAgentView{}
+	for _, view := range views {
+		viewByID[view.AgentID] = view
+	}
+	s.mu.Lock()
+	bindings := make([]Binding, 0, len(s.state.Bindings))
+	for _, binding := range s.state.Bindings {
+		bindings = append(bindings, binding)
+	}
+	managed := make(map[string]ManagedAgent, len(s.state.ManagedAgents))
+	for k, v := range s.state.ManagedAgents {
+		managed[k] = v
+	}
 	assignableChannelIDs := append([]string(nil), s.cfg.AssignableChannelIDs...)
 	defaultGuildID := s.cfg.DefaultGuildID
-	logsRoot := s.cfg.LogsRoot
-	downloadsRoot := s.cfg.DownloadsRoot
-	auditPath := s.cfg.AuditPath
 	s.mu.Unlock()
+	channelOptions := s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs)
+	channelLabels := map[string]string{}
+	for _, option := range channelOptions {
+		channelLabels[option.ID] = option.Label
+	}
+	result := make([]bindingView, 0, len(bindings)+len(managed))
+	seen := map[string]bool{}
+	for _, binding := range bindings {
+		view := viewByID[binding.AgentID]
+		result = append(result, bindingView{
+			AgentID:        binding.AgentID,
+			GuildID:        binding.GuildID,
+			ChannelID:      binding.ChannelID,
+			ChannelLabel:   firstNonEmpty(channelLabels[binding.ChannelID], binding.ChannelID),
+			State:          "active",
+			QueueDepth:     view.QueueDepth,
+			DesiredAgent:   binding.AgentID,
+			DesiredChannel: view.ChannelID,
+			LastJoinedAt:   binding.JoinedAt,
+			NeedsAttention: view.NeedsAttention,
+		})
+		seen[binding.AgentID] = true
+	}
+	for agentID, agent := range managed {
+		if seen[agentID] || agent.RequestedChannelID == "" {
+			continue
+		}
+		view := viewByID[agentID]
+		result = append(result, bindingView{
+			AgentID:        agentID,
+			GuildID:        agent.RequestedGuildID,
+			ChannelID:      agent.RequestedChannelID,
+			ChannelLabel:   firstNonEmpty(channelLabels[agent.RequestedChannelID], agent.RequestedChannelID),
+			State:          "desired",
+			QueueDepth:     view.QueueDepth,
+			DesiredAgent:   agentID,
+			DesiredChannel: agent.RequestedChannelID,
+			LastJoinedAt:   agent.LastJoinAt,
+			NeedsAttention: view.NeedsAttention,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ChannelID < result[j].ChannelID })
+	return result
+}
 
-	assignableChannels := s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs)
-	launchedAgentLogs := readLaunchedAgentLogs(launchedAgents, 30)
-	launchedAgentPTYInputs := readLaunchedAgentTranscript(launchedAgents, "pty-input.log", 40)
-	launchedAgentPTYOutputs := readLaunchedAgentTranscript(launchedAgents, "pty-output.log", 60)
-	recentChats := readRecentChats(logsRoot, 20)
-	recentAttachments, attachmentCount := readRecentAttachments(downloadsRoot, 20)
-	auditTail := readAuditTail(auditPath, 20)
+func (s *BridgeService) activityItems(limit int) []activityItem {
+	records := readAuditTail(s.cfg.AuditPath, limit)
+	items := make([]activityItem, 0, len(records))
+	for _, record := range records {
+		items = append(items, activityItem{Timestamp: record.Timestamp, Type: record.Type, Summary: summarizeAuditRecord(record)})
+	}
+	return items
+}
 
-	return dashboardData{
-		Envelope:                envelope,
-		Bindings:                bindings,
-		QueueSizes:              queueSizes,
-		DryRun:                  dryRun,
-		RecentChats:             recentChats,
-		RecentAttachments:       recentAttachments,
-		AttachmentCount:         attachmentCount,
-		AuditTail:               auditTail,
-		ManagedReactions:        reactions,
-		StatusReactions:         statusReactions,
-		FinalChoices:            finalChoices,
-		AssignableChannelIDs:    assignableChannelIDs,
-		AssignableChannels:      assignableChannels,
-		DefaultGuildID:          defaultGuildID,
-		LaunchedAgents:          launchedAgents,
-		LaunchedAgentLogs:       launchedAgentLogs,
-		LaunchedAgentPTYInputs:  launchedAgentPTYInputs,
-		LaunchedAgentPTYOutputs: launchedAgentPTYOutputs,
-		Now:                     time.Now().UTC(),
+func summarizeAuditRecord(record auditRecord) string {
+	payload, _ := json.Marshal(record.Payload)
+	text := string(payload)
+	if len(text) > 160 {
+		text = text[:160] + "..."
+	}
+	return text
+}
+
+func (s *BridgeService) findManagedAgentView(agentID string) (ManagedAgentView, bool) {
+	for _, view := range s.managedAgentViews() {
+		if view.AgentID == agentID {
+			return view, true
+		}
+	}
+	return ManagedAgentView{}, false
+}
+
+func (s *BridgeService) renderHTML(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := uiTemplates.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, fmt.Sprintf("template error: %v", err), http.StatusInternalServerError)
 	}
 }
 
@@ -121,29 +418,6 @@ func (s *BridgeService) resolveAssignableChannels(guildID string, ids []string) 
 	return options
 }
 
-func readLaunchedAgentLogs(agents map[string]LaunchedAgent, limit int) map[string][]string {
-	logs := make(map[string][]string, len(agents))
-	for agentID, agent := range agents {
-		if agent.LogPath == "" {
-			continue
-		}
-		logs[agentID] = readAgentLogSince(agent.LogPath, agent.StartedAt, limit)
-	}
-	return logs
-}
-
-func readLaunchedAgentTranscript(agents map[string]LaunchedAgent, name string, limit int) map[string][]string {
-	logs := make(map[string][]string, len(agents))
-	for agentID, agent := range agents {
-		if agent.LogPath == "" {
-			continue
-		}
-		path := filepath.Join(filepath.Dir(agent.LogPath), name)
-		logs[agentID] = readLastLines(path, limit)
-	}
-	return logs
-}
-
 func readAgentLogSince(path string, startedAt time.Time, limit int) []string {
 	lines := readAllLines(path)
 	filtered := make([]string, 0, len(lines))
@@ -153,7 +427,7 @@ func readAgentLogSince(path string, startedAt time.Time, limit int) []string {
 			continue
 		}
 		if ts, ok := parseLogTimestamp(trimmed); ok {
-			if ts.Before(startedAt.Add(-1 * time.Second)) {
+			if !startedAt.IsZero() && ts.Before(startedAt.Add(-1*time.Second)) {
 				continue
 			}
 		}
@@ -176,49 +450,6 @@ func parseLogTimestamp(line string) (time.Time, bool) {
 	return ts.UTC(), true
 }
 
-func readRecentChats(root string, limit int) []chatLogRecord {
-	var records []chatLogRecord
-	_ = filepath.Walk(filepath.Join(root, "chats"), func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		for _, line := range readLastLines(path, 10) {
-			var rec chatLogRecord
-			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				records = append(records, rec)
-			}
-		}
-		return nil
-	})
-	sort.Slice(records, func(i, j int) bool { return records[i].Timestamp.After(records[j].Timestamp) })
-	if len(records) > limit {
-		return records[:limit]
-	}
-	return records
-}
-
-func readRecentAttachments(root string, limit int) ([]AttachmentRecord, int) {
-	var records []AttachmentRecord
-	count := 0
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
-		}
-		count++
-		records = append(records, AttachmentRecord{
-			Filename:  info.Name(),
-			LocalPath: path,
-			Size:      int(info.Size()),
-		})
-		return nil
-	})
-	sort.Slice(records, func(i, j int) bool { return records[i].LocalPath > records[j].LocalPath })
-	if len(records) > limit {
-		records = records[:limit]
-	}
-	return records, count
-}
-
 func readAuditTail(path string, limit int) []auditRecord {
 	var records []auditRecord
 	for _, line := range readLastLines(path, limit) {
@@ -232,123 +463,6 @@ func readAuditTail(path string, limit int) []auditRecord {
 		return records[:limit]
 	}
 	return records
-}
-
-func renderDashboardHTML() string {
-	return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Discord Bridge Dashboard</title>
-  <style>
-    :root { color-scheme: dark; }
-    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
-    header { padding: 20px 24px; background: #11182d; position: sticky; top: 0; }
-    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-    .card { background: #121a30; border: 1px solid #24304d; border-radius: 12px; padding: 16px; overflow: auto; }
-    h1,h2,h3 { margin: 0 0 12px 0; }
-    pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #24304d; vertical-align: top; }
-    code { background: #0f172a; padding: 2px 6px; border-radius: 6px; }
-    .muted { color: #9ca3af; }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Discord Bridge Dashboard</h1>
-    <div class="muted">Accessible on your VPN by binding the service to a VPN/Tailscale host or <code>0.0.0.0</code>.</div>
-  </header>
-  <main>
-    <section class="card"><h2>Bridge</h2><pre id="bridge"></pre></section>
-    <section class="card"><h2>Launch Agent</h2>
-      <form id="launch-form">
-        <div><label>Agent ID<br><input name="agentId" value="agent-rpc-1" style="width:100%"></label></div>
-        <div><label>Guild ID (optional)<br><input name="guildId" style="width:100%"></label></div>
-        <div><label>Channel<br><select name="channelId" id="channel-select" style="width:100%"><option value="">Auto-assign</option></select></label></div>
-        <div><label>Command (optional)<br><input name="command" value="go" style="width:100%"></label></div>
-        <div><label>Args (space-separated)<br><input name="args" value="run ./research/agent-rpc/cmd/agent-rpc --bridge" style="width:100%"></label></div>
-        <div class="muted" style="margin-top:8px">Leave command blank to use the default agent-rpc bridge launcher.</div>
-        <div style="margin-top:10px"><button type="submit">Launch</button></div>
-      </form>
-      <div id="launch-result" class="muted" style="margin-top:10px"></div>
-    </section>
-    <section class="card"><h2>Bindings</h2><pre id="bindings"></pre></section>
-    <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
-    <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
-    <section class="card"><h2>Launched Agents</h2><div id="launched-controls"></div><pre id="launched"></pre></section>
-    <section class="card"><h2>Harness Log Preview</h2><div id="ptylogs"></div></section>
-    <section class="card"><h2>Legacy PTY Input Preview</h2><div id="ptyinputs"></div></section>
-    <section class="card"><h2>Legacy PTY Transcript Preview</h2><div id="ptyoutputs"></div></section>
-    <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
-    <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
-    <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
-  </main>
-  <script>
-    const pretty = (v) => JSON.stringify(v, null, 2);
-    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-    function renderRows(items, mapFn) {
-      if (!items || !items.length) return '<div class="muted">None yet.</div>';
-      return '<table><tbody>' + items.map(mapFn).join('') + '</tbody></table>';
-    }
-    async function refresh() {
-      const res = await fetch('/api/dashboard');
-      const data = await res.json();
-      document.getElementById('bridge').textContent = pretty({ envelope: data.envelope, dryRun: data.dryRun, now: data.now, defaultGuildId: data.defaultGuildId, assignableChannelIds: data.assignableChannelIds, statusReactions: data.statusReactions, finalChoices: data.finalReactionChoices });
-      const guildInput = document.querySelector('input[name="guildId"]');
-      if (guildInput && !guildInput.value && data.defaultGuildId) guildInput.value = data.defaultGuildId;
-      const select = document.getElementById('channel-select');
-      if (select) {
-        const current = select.value;
-        select.innerHTML = '<option value="">Auto-assign</option>' + (data.assignableChannels || []).map((ch) => '<option value="' + esc(ch.id) + '">' + esc(ch.label || ch.id) + '</option>').join('');
-        if (current) select.value = current;
-      }
-      document.getElementById('bindings').textContent = pretty(data.bindings);
-      document.getElementById('queues').textContent = pretty(data.queueSizes);
-      document.getElementById('reactions').textContent = pretty(data.managedReactions);
-      document.getElementById('launched').textContent = pretty(data.launchedAgents);
-      const launchedEntries = Object.entries(data.launchedAgents || {});
-      document.getElementById('launched-controls').innerHTML = launchedEntries.length ? launchedEntries.map(([agentId, agent]) => '<div style="margin:0 0 8px 0"><button data-stop-agent="' + esc(agentId) + '"' + ((agent && agent.state === 'running') ? '' : ' disabled') + '>Stop ' + esc(agentId) + '</button> <span class="muted">' + esc((agent && agent.state) || 'unknown') + '</span></div>').join('') : '<div class="muted">No launched agents.</div>';
-      const logEntries = Object.entries(data.launchedAgentLogs || {});
-      const inputEntries = Object.entries(data.launchedAgentPtyInputs || {});
-      const outputEntries = Object.entries(data.launchedAgentPtyOutputs || {});
-      document.getElementById('ptylogs').innerHTML = logEntries.length ? logEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No launched agent logs yet.</div>';
-      document.getElementById('ptyinputs').innerHTML = inputEntries.length ? inputEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No PTY input transcript yet.</div>';
-      document.getElementById('ptyoutputs').innerHTML = outputEntries.length ? outputEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No PTY transcript yet.</div>';
-      document.getElementById('chats').innerHTML = renderRows(data.recentChats, (item) => '<tr><td><strong>' + esc(item.authorName || item.authorId || 'unknown') + '</strong><div class="muted">' + esc(item.channelId) + ' · ' + esc(item.timestamp) + '</div></td><td>' + esc(item.content || '') + '</td></tr>');
-      document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
-      document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');
-    }
-    document.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-stop-agent]');
-      if (!btn) return;
-      const agentId = btn.getAttribute('data-stop-agent');
-      const res = await fetch('/api/stop-agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId }) });
-      const text = await res.text();
-      document.getElementById('launch-result').textContent = res.ok ? 'Stopped: ' + text : 'Stop failed: ' + text;
-      refresh();
-    });
-    document.getElementById('launch-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      const payload = {
-        agentId: String(form.get('agentId') || '').trim(),
-        guildId: String(form.get('guildId') || '').trim(),
-        channelId: String(form.get('channelId') || '').trim(),
-        command: String(form.get('command') || '').trim(),
-        args: String(form.get('args') || '').trim().split(/\s+/).filter(Boolean)
-      };
-      const res = await fetch('/api/launch-agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const text = await res.text();
-      document.getElementById('launch-result').textContent = res.ok ? 'Launched: ' + text : 'Launch failed: ' + text;
-      refresh();
-    });
-    refresh();
-    setInterval(refresh, 5000);
-  </script>
-</body>
-</html>`
 }
 
 func readAllLines(path string) []string {
@@ -380,3 +494,233 @@ func readLastLines(path string, limit int) []string {
 	}
 	return trimmed
 }
+
+func splitArgs(raw string) []string {
+	parts := strings.Fields(strings.TrimSpace(raw))
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+const uiTemplateSource = `
+{{define "header"}}
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
+    header { padding: 20px 24px; background: #11182d; border-bottom: 1px solid #24304d; }
+    main { padding: 24px; display: grid; gap: 16px; }
+    nav { display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
+    nav a { color:#cbd5e1; text-decoration:none; padding:8px 12px; border:1px solid #24304d; border-radius:999px; }
+    nav a.active { background:#2563eb; border-color:#2563eb; color:white; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .grid-2 { display:grid; gap:16px; grid-template-columns: 1.2fr 0.8fr; }
+    .card { background:#121a30; border:1px solid #24304d; border-radius:12px; padding:16px; overflow:auto; }
+    h1,h2,h3,p { margin-top:0; }
+    table { width:100%; border-collapse: collapse; }
+    th,td { text-align:left; padding:8px; border-bottom:1px solid #24304d; vertical-align:top; }
+    .muted { color:#9ca3af; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#1e293b; border:1px solid #334155; font-size:12px; }
+    .good { background:#14532d; border-color:#166534; }
+    .warn { background:#78350f; border-color:#92400e; }
+    .bad { background:#7f1d1d; border-color:#991b1b; }
+    form.inline { display:inline; }
+    input, select, button { background:#0f172a; color:#e5e7eb; border:1px solid #334155; border-radius:8px; padding:8px; }
+    button { cursor:pointer; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .stack { display:grid; gap:10px; }
+    pre { white-space:pre-wrap; word-break:break-word; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Discord Bridge</h1>
+    <div class="muted">Bridge ID {{.Envelope.BridgeID}} · Host {{.Envelope.Host}} · Dry run {{.DryRun}}</div>
+    <nav>
+      <a href="/" {{if eq .CurrentPath "/"}}class="active"{{end}}>Overview</a>
+      <a href="/managed-agents" {{if eq .CurrentPath "/managed-agents"}}class="active"{{end}}>Managed Agents</a>
+      <a href="/bindings" {{if eq .CurrentPath "/bindings"}}class="active"{{end}}>Bindings</a>
+      <a href="/activity" {{if eq .CurrentPath "/activity"}}class="active"{{end}}>Activity</a>
+    </nav>
+  </header>
+  <main>
+{{end}}
+
+{{define "footer"}}
+  </main>
+</body>
+</html>
+{{end}}
+
+{{define "page_overview"}}{{template "header" .}}{{template "content_overview" .}}{{template "footer" .}}{{end}}
+{{define "page_agents"}}{{template "header" .}}{{template "content_agents" .}}{{template "footer" .}}{{end}}
+{{define "page_bindings"}}{{template "header" .}}{{template "content_bindings" .}}{{template "footer" .}}{{end}}
+{{define "page_activity"}}{{template "header" .}}{{template "content_activity" .}}{{template "footer" .}}{{end}}
+{{define "page_agent_detail"}}{{template "header" .}}{{template "content_agent_detail" .}}{{template "footer" .}}{{end}}
+
+{{define "content_overview"}}
+  <section class="card" id="overview" hx-get="/partials/overview" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_overview" .}}</section>
+  <section class="grid-2">
+    <div class="card" id="agents-table" hx-get="/partials/managed-agents-table" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_agents_table" .}}</div>
+    <div class="card" id="activity-feed" hx-get="/partials/activity-feed" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_activity_feed" .}}</div>
+  </section>
+{{end}}
+
+{{define "content_agents"}}
+  <section class="grid-2">
+    <div class="card" id="agents-table" hx-get="/partials/managed-agents-table" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_agents_table" .}}</div>
+    <div class="card">
+      <h2>Register or update managed agent</h2>
+      <form class="stack" method="post" action="/managed-agents" hx-post="/managed-agents" hx-target="#agents-table" hx-swap="outerHTML">
+        <label>Agent ID<br><input name="agentId" required></label>
+        <label>Creds Ref<br><input name="credsRef" value="local-session"></label>
+        <label>Desired State<br>
+          <select name="desiredState">
+            <option value="stopped">stopped</option>
+            <option value="running">running</option>
+            <option value="disabled">disabled</option>
+          </select>
+        </label>
+        <label>Guild ID<br><input name="guildId" value="{{.DefaultGuildID}}"></label>
+        <label>Channel<br>
+          <select name="channelId">
+            <option value="">Auto-assign</option>
+            {{range .AssignableChannels}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
+          </select>
+        </label>
+        <label>Command<br><input name="command" value="go"></label>
+        <label>Args<br><input name="args" value="run ./research/agent-rpc/cmd/agent-rpc --bridge"></label>
+        <label>Working Dir<br><input name="workingDir" value=""></label>
+        <button type="submit">Save managed agent</button>
+      </form>
+    </div>
+  </section>
+{{end}}
+
+{{define "content_bindings"}}
+  <section class="card" id="bindings-table" hx-get="/partials/bindings-table" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_bindings_table" .}}</section>
+{{end}}
+
+{{define "content_activity"}}
+  <section class="card" id="activity-feed" hx-get="/partials/activity-feed" hx-trigger="load, every 10s" hx-swap="outerHTML">{{template "partial_activity_feed" .}}</section>
+{{end}}
+
+{{define "content_agent_detail"}}
+  <section class="card">
+    <p><a href="/managed-agents">← Back to managed agents</a></p>
+    {{if .Agent}}
+      <h2>{{.Agent.AgentID}}</h2>
+      <div class="grid">
+        <div><strong>Desired</strong><br><span class="badge">{{.Agent.DesiredState}}</span></div>
+        <div><strong>Process</strong><br><span class="badge">{{.Agent.ProcessState}}</span></div>
+        <div><strong>Bridge</strong><br><span class="badge">{{.Agent.BridgeState}}</span></div>
+        <div><strong>Work</strong><br><span class="badge">{{.Agent.WorkState}}</span></div>
+      </div>
+      <p class="muted">{{.Agent.CommandLabel}}</p>
+      <p>Channel: <code>{{.Agent.ChannelID}}</code> · Guild: <code>{{.Agent.GuildID}}</code> · PID: <code>{{.Agent.PID}}</code></p>
+      <p>Last activity: {{since .Agent.LastActivityAt}} · Last completion: {{since .Agent.LastCompletionAt}} · Last join: {{since .Agent.LastJoinAt}}</p>
+      {{if .Agent.LastError}}<p><span class="badge bad">Last error</span> {{.Agent.LastError}}</p>{{end}}
+      <div class="actions">
+        <form class="inline" method="post" action="/managed-agents/{{.Agent.AgentID}}/start"><button>Start</button></form>
+        <form class="inline" method="post" action="/managed-agents/{{.Agent.AgentID}}/stop"><button>Stop</button></form>
+        <form class="inline" method="post" action="/managed-agents/{{.Agent.AgentID}}/restart"><button>Restart</button></form>
+      </div>
+      <h3>Recent logs</h3>
+      <pre>{{join .RecentLogs "\n"}}</pre>
+    {{end}}
+  </section>
+{{end}}
+
+{{define "partial_overview"}}
+<div class="card" id="overview">
+  <h2>Overview</h2>
+  <div class="grid">
+    <div><strong>Discord</strong><br><span class="badge {{if eq .Overview.DiscordStatus "connected"}}good{{else}}bad{{end}}">{{.Overview.DiscordStatus}}</span></div>
+    <div><strong>Uptime</strong><br>{{.Overview.BridgeUptime}}</div>
+    <div><strong>Managed agents</strong><br>{{.Overview.ManagedAgents}}</div>
+    <div><strong>Healthy joined</strong><br>{{.Overview.HealthyJoined}}</div>
+    <div><strong>Queued events</strong><br>{{.Overview.QueuedEvents}}</div>
+    <div><strong>Needs attention</strong><br>{{.Overview.NeedsAttention}}</div>
+  </div>
+</div>
+{{end}}
+
+{{define "partial_agents_table"}}
+<div class="card" id="agents-table">
+  <h2>Managed Agents</h2>
+  <table>
+    <thead><tr><th>Agent</th><th>Desired</th><th>Process</th><th>Bridge</th><th>Work</th><th>Binding</th><th>Queue</th><th>Last activity</th><th>Actions</th></tr></thead>
+    <tbody>
+      {{range .ManagedAgents}}
+      <tr>
+        <td><a href="/managed-agents/{{.AgentID}}">{{.AgentID}}</a>{{if .NeedsAttention}} <span class="badge warn">attention</span>{{end}}<div class="muted">{{.CommandLabel}}</div></td>
+        <td><span class="badge">{{.DesiredState}}</span></td>
+        <td><span class="badge {{if eq .ProcessState "running"}}good{{else if or (eq .ProcessState "failed") (eq .ProcessState "exited")}}bad{{else}}warn{{end}}">{{.ProcessState}}</span></td>
+        <td><span class="badge {{if eq .BridgeState "bound"}}good{{else if eq .BridgeState "stale"}}bad{{else}}warn{{end}}">{{.BridgeState}}</span></td>
+        <td><span class="badge">{{.WorkState}}</span></td>
+        <td>{{if .ChannelID}}<code>{{.ChannelID}}</code>{{else}}<span class="muted">unassigned</span>{{end}}</td>
+        <td>{{.QueueDepth}}</td>
+        <td>{{since .LastActivityAt}}</td>
+        <td>
+          <div class="actions">
+            {{if .CanStart}}<form class="inline" method="post" action="/managed-agents/{{.AgentID}}/start" hx-post="/managed-agents/{{.AgentID}}/start" hx-target="#agents-table" hx-swap="outerHTML"><button>Start</button></form>{{end}}
+            {{if .CanStop}}<form class="inline" method="post" action="/managed-agents/{{.AgentID}}/stop" hx-post="/managed-agents/{{.AgentID}}/stop" hx-target="#agents-table" hx-swap="outerHTML"><button>Stop</button></form>{{end}}
+            {{if .CanRestart}}<form class="inline" method="post" action="/managed-agents/{{.AgentID}}/restart" hx-post="/managed-agents/{{.AgentID}}/restart" hx-target="#agents-table" hx-swap="outerHTML"><button>Restart</button></form>{{end}}
+          </div>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="9" class="muted">No managed agents yet.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{define "partial_bindings_table"}}
+<div class="card" id="bindings-table">
+  <h2>Bindings</h2>
+  <table>
+    <thead><tr><th>Agent</th><th>State</th><th>Guild</th><th>Channel</th><th>Queue</th><th>Last join</th></tr></thead>
+    <tbody>
+      {{range .Bindings}}
+      <tr>
+        <td><a href="/managed-agents/{{.AgentID}}">{{.AgentID}}</a>{{if .NeedsAttention}} <span class="badge warn">attention</span>{{end}}</td>
+        <td><span class="badge">{{.State}}</span></td>
+        <td><code>{{.GuildID}}</code></td>
+        <td>{{if .ChannelLabel}}{{.ChannelLabel}}{{else}}<code>{{.ChannelID}}</code>{{end}}</td>
+        <td>{{.QueueDepth}}</td>
+        <td>{{since .LastJoinedAt}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="6" class="muted">No bindings yet.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{define "partial_activity_feed"}}
+<div class="card" id="activity-feed">
+  <h2>Activity</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Type</th><th>Summary</th></tr></thead>
+    <tbody>
+      {{range .Activity}}
+      <tr><td>{{since .Timestamp}}</td><td><code>{{.Type}}</code></td><td>{{.Summary}}</td></tr>
+      {{else}}
+      <tr><td colspan="3" class="muted">No recent activity.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+`

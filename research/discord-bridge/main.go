@@ -176,10 +176,31 @@ type Binding struct {
 	Active    bool      `json:"active"`
 }
 
+type ManagedAgent struct {
+	AgentID             string    `json:"agentId"`
+	CredsRef            string    `json:"credsRef,omitempty"`
+	DesiredState        string    `json:"desiredState,omitempty"`
+	Command             string    `json:"command,omitempty"`
+	Args                []string  `json:"args,omitempty"`
+	WorkingDir          string    `json:"workingDir,omitempty"`
+	RequestedGuildID    string    `json:"requestedGuildId,omitempty"`
+	RequestedChannelID  string    `json:"requestedChannelId,omitempty"`
+	AutoLaunch          bool      `json:"autoLaunch,omitempty"`
+	LastJoinAt          time.Time `json:"lastJoinAt,omitempty"`
+	LastQueuedAt        time.Time `json:"lastQueuedAt,omitempty"`
+	LastCompletionAt    time.Time `json:"lastCompletionAt,omitempty"`
+	LastLaunchedAt      time.Time `json:"lastLaunchedAt,omitempty"`
+	LastStoppedAt       time.Time `json:"lastStoppedAt,omitempty"`
+	LastProcessPID      int       `json:"lastProcessPid,omitempty"`
+	LastObservedProcess string    `json:"lastObservedProcess,omitempty"`
+	LastError           string    `json:"lastError,omitempty"`
+}
+
 type PersistedState struct {
-	Bindings            map[string]Binding `json:"bindings"`
-	ProcessedMessageIDs map[string]int64   `json:"processedMessageIds"`
-	ManagedReactions    map[string]string  `json:"managedReactions"`
+	Bindings            map[string]Binding      `json:"bindings"`
+	ProcessedMessageIDs map[string]int64        `json:"processedMessageIds"`
+	ManagedReactions    map[string]string       `json:"managedReactions"`
+	ManagedAgents       map[string]ManagedAgent `json:"managedAgents,omitempty"`
 }
 
 type AttachmentRecord struct {
@@ -344,6 +365,10 @@ func (s *BridgeService) onMessageCreate(_ *discordgo.Session, m *discordgo.Messa
 	}
 	s.mu.Lock()
 	s.queues[binding.AgentID] = append(s.queues[binding.AgentID], event)
+	managed := s.upsertManagedAgentLocked(ManagedAgent{AgentID: binding.AgentID, DesiredState: "running"})
+	managed.LastQueuedAt = time.Now().UTC()
+	s.state.ManagedAgents[binding.AgentID] = managed
+	_ = s.saveStateLocked()
 	s.mu.Unlock()
 	_ = s.appendAudit("message.queued", event)
 }
@@ -362,6 +387,7 @@ func loadState(path string) (PersistedState, error) {
 		Bindings:            map[string]Binding{},
 		ProcessedMessageIDs: map[string]int64{},
 		ManagedReactions:    map[string]string{},
+		ManagedAgents:       map[string]ManagedAgent{},
 	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -381,6 +407,9 @@ func loadState(path string) (PersistedState, error) {
 	}
 	if state.ManagedReactions == nil {
 		state.ManagedReactions = map[string]string{}
+	}
+	if state.ManagedAgents == nil {
+		state.ManagedAgents = map[string]ManagedAgent{}
 	}
 	return state, nil
 }
