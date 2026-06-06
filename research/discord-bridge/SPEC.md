@@ -370,7 +370,57 @@ where
 
 ---
 
-## 9. `DiscordBridgeAuditLog`
+## 9. `DiscordBridgeReactiveHarness`
+
+### Prose Spec
+
+The bridge may provide repeatable, model-independent structure around a message before and after the LLM turn.
+
+A common default behavior is:
+
+- add a basic acknowledgement reaction when a message is first accepted
+- update that reaction to reflect LLM progress/status while the turn is running
+- offer the LLM a constrained choice of final emoji reactions to leave when the final reply is ready
+
+This makes the bridge behave a bit like a harness: the bridge provides durable interaction structure, while the agent/model provides the content.
+
+### Z Spec
+
+```text
+DiscordBridgeReactiveHarness
+  ackReaction: seq CHAR
+  statusReactions: ℙ seq CHAR
+  finalReactionChoices: ℙ seq CHAR
+  enabled: 𝔹
+where
+  enabled = true
+  ackReaction ≠ ⟨⟩
+  statusReactions ≠ ∅
+  finalReactionChoices ≠ ∅
+```
+
+### Data examples
+
+```json
+{
+  "enabled": true,
+  "ackReaction": "✅",
+  "statusReactions": ["⏳", "🤖", "💭", "✅", "⚠️"],
+  "finalReactionChoices": ["✅", "👍", "👀", "🧠", "❤️"]
+}
+```
+
+### Implementation suggestions / specifics
+
+- Add an acknowledgement reaction as soon as the bridge accepts a post for processing.
+- Update the active reaction as the agent transitions through queued, thinking, tool use, waiting, or finished states.
+- When the final reply is ready, expose a small bridge-defined reaction palette the LLM can choose from.
+- Keep the reaction protocol bridge-owned so behavior stays consistent across agents and models.
+- This pattern may extend to other repeatable bridge behaviors, such as read receipts, progress markers, routing banners, retry notices, and attachment lifecycle indicators.
+
+---
+
+## 10. `DiscordBridgeAuditLog`
 
 ### Prose Spec
 
@@ -407,7 +457,7 @@ where
 
 ---
 
-## 10. `DiscordBridgeInvariants`
+## 11. `DiscordBridgeInvariants`
 
 ### Prose Spec
 
