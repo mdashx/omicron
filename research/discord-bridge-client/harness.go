@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -121,13 +123,43 @@ func (h *Harness) handleEvent(evt InboundEvent) error {
 	if err != nil {
 		return err
 	}
-	if result.Text == "" {
-		result.Text = "[discord-bridge-client] agent completed with no visible output"
+	content := result.Text
+	if useStructuredOutput {
+		content = h.buildStructuredReplyNotice()
+	} else if content == "" {
+		content = "[discord-bridge-client] agent completed with no visible output"
 	}
-	if err := h.client.Complete(h.cfg.AgentID, CompleteRequest{MessageID: evt.MessageID, Content: result.Text, FinalReaction: result.FinalReaction}); err != nil {
+	if err := h.client.Complete(h.cfg.AgentID, CompleteRequest{MessageID: evt.MessageID, Content: content, FinalReaction: result.FinalReaction}); err != nil {
 		return err
 	}
 	return h.markProcessed(evt.EventID, evt.MessageID)
+}
+
+func (h *Harness) buildStructuredReplyNotice() string {
+	source := h.currentOutputSource()
+	path := strings.TrimSpace(source.ArchiveFile)
+	sourceKind := "session-archive"
+	if path == "" {
+		path = strings.TrimSpace(source.SessionFile)
+		sourceKind = "session"
+	}
+	if path == "" {
+		return "agent replied\noutputMode: pi-jsonl\nlogSource: unavailable"
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("agent replied\noutputMode: pi-jsonl\nlogSource: %s\nlogPath: %s\nlogStatError: %v", sourceKind, path, err)
+	}
+	return fmt.Sprintf("agent replied\noutputMode: pi-jsonl\nlogSource: %s\nlogPath: %s\nlogFile: %s\nlogBytes: %d\nlogModifiedAt: %s", sourceKind, path, filepath.Base(path), info.Size(), info.ModTime().UTC().Format(time.RFC3339))
+}
+
+func (h *Harness) currentOutputSource() PiStructuredOutputSource {
+	if h.output != nil && h.output.Enabled() {
+		h.syncOutputSource()
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state.OutputSource
 }
 
 func (h *Harness) waitForCompletion(cursor piOutputCursor, useStructuredOutput bool) (CompletionResult, error) {
