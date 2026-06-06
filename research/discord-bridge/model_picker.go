@@ -9,9 +9,49 @@ import (
 )
 
 func (s *BridgeService) onInteractionCreate(_ *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i == nil || i.Type != discordgo.InteractionMessageComponent || i.Member == nil && i.User == nil {
+	if i == nil || (i.Member == nil && i.User == nil) {
 		return
 	}
+	switch i.Type {
+	case discordgo.InteractionApplicationCommand:
+		s.handleApplicationCommandInteraction(i)
+	case discordgo.InteractionMessageComponent:
+		s.handleModelPickerSelection(i)
+	}
+}
+
+func (s *BridgeService) handleApplicationCommandInteraction(i *discordgo.InteractionCreate) {
+	data := i.ApplicationCommandData()
+	if strings.ToLower(strings.TrimSpace(data.Name)) != "model" {
+		return
+	}
+	userID := interactionUserID(i)
+	if !s.isAdminAuthorized(userID) {
+		s.respondInteraction(i, true, bridgeResponse("Command denied.", "You are not authorized to use bridge slash commands here."))
+		_ = s.appendAudit("bridge.admin.denied", map[string]any{"authorId": userID, "channelId": i.ChannelID, "command": "/model", "reason": "unauthorized"})
+		return
+	}
+	agentID := strings.TrimSpace(interactionStringOption(data.Options, "agent"))
+	if agentID == "" {
+		s.mu.Lock()
+		binding, ok := s.bindingForChannelLocked(i.ChannelID)
+		s.mu.Unlock()
+		if ok {
+			agentID = binding.AgentID
+		}
+	}
+	if agentID == "" {
+		s.respondInteraction(i, true, bridgeResponse("Command failed.", "No target agent was specified and this channel has no bound room agent."))
+		return
+	}
+	if err := s.openModelPickerInteraction(i, agentID); err != nil {
+		s.respondInteraction(i, true, bridgeResponse("Command failed.", err.Error()))
+		_ = s.appendAudit("bridge.model_picker.failed", map[string]any{"authorId": userID, "agentId": agentID, "channelId": i.ChannelID, "error": err.Error()})
+		return
+	}
+}
+
+func (s *BridgeService) handleModelPickerSelection(i *discordgo.InteractionCreate) {
 	data := i.MessageComponentData()
 	if !strings.HasPrefix(data.CustomID, "model-picker:") {
 		return
@@ -19,7 +59,7 @@ func (s *BridgeService) onInteractionCreate(_ *discordgo.Session, i *discordgo.I
 	userID := interactionUserID(i)
 	s.mu.Lock()
 	pending, ok := s.pendingModelPickers[data.CustomID]
-	if ok {
+	if ok && pending.UserID == userID && time.Since(pending.CreatedAt) <= 10*time.Minute {
 		delete(s.pendingModelPickers, data.CustomID)
 	}
 	s.mu.Unlock()
@@ -71,8 +111,47 @@ func (s *BridgeService) onInteractionCreate(_ *discordgo.Session, i *discordgo.I
 }
 
 func (s *BridgeService) openModelPicker(m *discordgo.MessageCreate, agentID string) error {
+	customID, components, err := s.buildModelPicker()
+	if err != nil {
+		return err
+	}
+	msg := &discordgo.MessageSend{
+		Content:    bridgeResponse("Model picker", fmt.Sprintf("Agent: %s\nChoose a model below.", agentID)),
+		Reference:  &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID},
+		Components: components,
+	}
+	if _, err := s.dg.ChannelMessageSendComplex(m.ChannelID, msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pendingModelPickers[customID] = pendingModelPicker{UserID: m.Author.ID, AgentID: agentID, ChannelID: m.ChannelID, ReplyToMessage: m.ID, CreatedAt: time.Now().UTC()}
+	s.mu.Unlock()
+	_ = s.appendAudit("bridge.model_picker.opened", map[string]any{"authorId": m.Author.ID, "agentId": agentID, "channelId": m.ChannelID, "mode": "message"})
+	return nil
+}
+
+func (s *BridgeService) openModelPickerInteraction(i *discordgo.InteractionCreate, agentID string) error {
+	customID, components, err := s.buildModelPicker()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pendingModelPickers[customID] = pendingModelPicker{UserID: interactionUserID(i), AgentID: agentID, ChannelID: i.ChannelID, CreatedAt: time.Now().UTC()}
+	s.mu.Unlock()
+	_ = s.appendAudit("bridge.model_picker.opened", map[string]any{"authorId": interactionUserID(i), "agentId": agentID, "channelId": i.ChannelID, "mode": "interaction"})
+	return s.dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content:    bridgeResponse("Model picker", fmt.Sprintf("Agent: %s\nChoose a model below.", agentID)),
+			Components: components,
+			Flags:      discordgo.MessageFlagsEphemeral,
+		},
+	})
+}
+
+func (s *BridgeService) buildModelPicker() (string, []discordgo.MessageComponent, error) {
 	if len(s.cfg.AvailableModels) == 0 {
-		return fmt.Errorf("no available models configured for picker")
+		return "", nil, fmt.Errorf("no available models configured for picker")
 	}
 	customID := fmt.Sprintf("model-picker:%d", time.Now().UnixNano())
 	options := make([]discordgo.SelectMenuOption, 0, len(s.cfg.AvailableModels))
@@ -87,23 +166,32 @@ func (s *BridgeService) openModelPicker(m *discordgo.MessageCreate, agentID stri
 			Description: truncateDiscordLabel(model.ID, 100),
 		})
 	}
-	msg := &discordgo.MessageSend{
-		Content:   bridgeResponse("Model picker", fmt.Sprintf("Agent: %s\nChoose a model below.", agentID)),
-		Reference: &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID},
-		Components: []discordgo.MessageComponent{
-			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-				discordgo.SelectMenu{CustomID: customID, Placeholder: "Select a model", Options: options},
+	components := []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: customID, Placeholder: "Select a model", Options: options},
+		}},
+	}
+	return customID, components, nil
+}
+
+func (s *BridgeService) registerApplicationCommands() error {
+	if s.dg == nil || s.dg.State == nil || s.dg.State.User == nil {
+		return fmt.Errorf("discord session user not ready")
+	}
+	guildID := strings.TrimSpace(s.cfg.DefaultGuildID)
+	_, err := s.dg.ApplicationCommandBulkOverwrite(s.dg.State.User.ID, guildID, []*discordgo.ApplicationCommand{
+		{
+			Name:        "model",
+			Description: "Open the bridge model picker for the bound room agent or a specific agent",
+			Options: []*discordgo.ApplicationCommandOption{{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "agent",
+				Description: "Managed agent id",
+				Required:    false,
 			}},
 		},
-	}
-	if _, err := s.dg.ChannelMessageSendComplex(m.ChannelID, msg); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.pendingModelPickers[customID] = pendingModelPicker{UserID: m.Author.ID, AgentID: agentID, ChannelID: m.ChannelID, ReplyToMessage: m.ID, CreatedAt: time.Now().UTC()}
-	s.mu.Unlock()
-	_ = s.appendAudit("bridge.model_picker.opened", map[string]any{"authorId": m.Author.ID, "agentId": agentID, "channelId": m.ChannelID})
-	return nil
+	})
+	return err
 }
 
 func (s *BridgeService) respondInteraction(i *discordgo.InteractionCreate, ephemeral bool, content string) {
@@ -115,6 +203,15 @@ func (s *BridgeService) respondInteraction(i *discordgo.InteractionCreate, ephem
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: content, Flags: flags},
 	})
+}
+
+func interactionStringOption(options []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Name), name) {
+			return option.StringValue()
+		}
+	}
+	return ""
 }
 
 func interactionUserID(i *discordgo.InteractionCreate) string {

@@ -388,6 +388,12 @@ func (s *BridgeService) onReady(_ *discordgo.Session, r *discordgo.Ready) {
 	s.envelope.BotTag = r.User.String()
 	s.mu.Unlock()
 	_ = s.appendAudit("discord.ready", map[string]any{"botUserId": r.User.ID, "botTag": r.User.String()})
+	if err := s.registerApplicationCommands(); err != nil {
+		log.Printf("register application commands: %v", err)
+		_ = s.appendAudit("discord.commands.failed", map[string]any{"error": err.Error()})
+		return
+	}
+	_ = s.appendAudit("discord.commands.registered", map[string]any{"guildId": s.cfg.DefaultGuildID, "commands": []string{"model"}})
 }
 
 func (s *BridgeService) onMessageCreate(_ *discordgo.Session, m *discordgo.MessageCreate) {
