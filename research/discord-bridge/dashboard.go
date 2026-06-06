@@ -33,6 +33,7 @@ type dashboardData struct {
 	AssignableChannels   []channelOption          `json:"assignableChannels"`
 	DefaultGuildID       string                   `json:"defaultGuildId"`
 	LaunchedAgents       map[string]LaunchedAgent `json:"launchedAgents"`
+	LaunchedAgentLogs    map[string][]string      `json:"launchedAgentLogs"`
 	Now                  time.Time                `json:"now"`
 }
 
@@ -66,6 +67,7 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 	s.mu.Unlock()
 
 	assignableChannels := s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs)
+	launchedAgentLogs := readLaunchedAgentLogs(launchedAgents, 30)
 	recentChats := readRecentChats(logsRoot, 20)
 	recentAttachments, attachmentCount := readRecentAttachments(downloadsRoot, 20)
 	auditTail := readAuditTail(auditPath, 20)
@@ -86,6 +88,7 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 		AssignableChannels:   assignableChannels,
 		DefaultGuildID:       defaultGuildID,
 		LaunchedAgents:       launchedAgents,
+		LaunchedAgentLogs:    launchedAgentLogs,
 		Now:                  time.Now().UTC(),
 	}
 }
@@ -110,6 +113,17 @@ func (s *BridgeService) resolveAssignableChannels(guildID string, ids []string) 
 		options = append(options, channelOption{ID: id, GuildID: guildID, Name: name, Label: label})
 	}
 	return options
+}
+
+func readLaunchedAgentLogs(agents map[string]LaunchedAgent, limit int) map[string][]string {
+	logs := make(map[string][]string, len(agents))
+	for agentID, agent := range agents {
+		if agent.LogPath == "" {
+			continue
+		}
+		logs[agentID] = readLastLines(agent.LogPath, limit)
+	}
+	return logs
 }
 
 func readRecentChats(root string, limit int) []chatLogRecord {
@@ -212,6 +226,7 @@ func renderDashboardHTML() string {
     <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
     <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
     <section class="card"><h2>Launched Agents</h2><pre id="launched"></pre></section>
+    <section class="card"><h2>PTY Log Preview</h2><div id="ptylogs"></div></section>
     <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
     <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
     <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
@@ -239,6 +254,8 @@ func renderDashboardHTML() string {
       document.getElementById('queues').textContent = pretty(data.queueSizes);
       document.getElementById('reactions').textContent = pretty(data.managedReactions);
       document.getElementById('launched').textContent = pretty(data.launchedAgents);
+      const logEntries = Object.entries(data.launchedAgentLogs || {});
+      document.getElementById('ptylogs').innerHTML = logEntries.length ? logEntries.map(([agentId, lines]) => '<h3>' + esc(agentId) + '</h3><pre>' + esc((lines || []).join('\n')) + '</pre>').join('') : '<div class="muted">No launched agent logs yet.</div>';
       document.getElementById('chats').innerHTML = renderRows(data.recentChats, (item) => '<tr><td><strong>' + esc(item.authorName || item.authorId || 'unknown') + '</strong><div class="muted">' + esc(item.channelId) + ' · ' + esc(item.timestamp) + '</div></td><td>' + esc(item.content || '') + '</td></tr>');
       document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
       document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');

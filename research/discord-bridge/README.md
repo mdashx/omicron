@@ -42,7 +42,7 @@ If the explicit auto-assignment env vars are omitted, the bridge will try to inf
 
 ## Dashboard
 
-The dashboard includes a simple **Launch Agent** control that can start a new `discoagent` process and bind it to a Discord channel. It now shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels.
+The dashboard includes a simple **Launch Agent** control that can start a new `discoagent` process and bind it to a Discord channel. It now shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a **PTY Log Preview** panel that tails launched harness logs so you can inspect agent-side issues directly from the UI.
 
 
 Open:
