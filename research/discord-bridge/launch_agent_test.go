@@ -22,10 +22,11 @@ func TestResolveLaunchSpecDefaultsToAgentRPCGoRunWhenRepoRootFound(t *testing.T)
 	if spec.Command != "go" {
 		t.Fatalf("expected go command, got %q", spec.Command)
 	}
-	if len(spec.Args) != 3 || spec.Args[0] != "run" || spec.Args[2] != "--bridge" {
+	if len(spec.Args) != 3 || spec.Args[0] != "run" || spec.Args[1] != "./cmd/agent-rpc" || spec.Args[2] != "--bridge" {
 		t.Fatalf("unexpected args: %#v", spec.Args)
 	}
-	if spec.WorkingDir != repoRoot {
+	expectedDir := filepath.Join(repoRoot, "research", "agent-rpc")
+	if spec.WorkingDir != expectedDir {
 		t.Fatalf("unexpected working dir: %q", spec.WorkingDir)
 	}
 }

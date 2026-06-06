@@ -47,7 +47,7 @@ If `DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true`, the bridge will synthesize 
 
 ## Dashboard
 
-The dashboard includes a simple **Launch Agent** control that can start a new `agent-rpc --bridge` process and bind it to a Discord channel. By default it launches `go run ./research/agent-rpc/cmd/agent-rpc --bridge` from the repo root when available, and falls back to `agent-rpc --bridge` otherwise. It shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a harness log preview panel so you can inspect agent-side issues directly from the UI.
+The dashboard includes a simple **Launch Agent** control that can start a new `agent-rpc --bridge` process and bind it to a Discord channel. By default it launches `go run ./cmd/agent-rpc --bridge` from the `research/agent-rpc` module directory when available, and falls back to `agent-rpc --bridge` otherwise. It shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a harness log preview panel so you can inspect agent-side issues directly from the UI.
 
 
 Open:

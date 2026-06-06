@@ -597,7 +597,7 @@ const uiTemplateSource = `
           </select>
         </label>
         <label>Command<br><input name="command" value="go"></label>
-        <label>Args<br><input name="args" value="run ./research/agent-rpc/cmd/agent-rpc --bridge"></label>
+        <label>Args<br><input name="args" value="run ./cmd/agent-rpc --bridge"></label>
         <label>Working Dir<br><input name="workingDir" value=""></label>
         <button type="submit">Save managed agent</button>
       </form>

@@ -146,10 +146,11 @@ func resolveLaunchSpec(req launchAgentRequest, repoRoot string) (launchSpec, err
 	workingDir := strings.TrimSpace(req.WorkingDir)
 	if command == "" {
 		if repoRoot != "" {
+			agentRPCRoot := filepath.Join(repoRoot, "research", "agent-rpc")
 			return launchSpec{
 				Command:    "go",
-				Args:       []string{"run", "./research/agent-rpc/cmd/agent-rpc", "--bridge"},
-				WorkingDir: firstNonEmpty(workingDir, repoRoot),
+				Args:       []string{"run", "./cmd/agent-rpc", "--bridge"},
+				WorkingDir: firstNonEmpty(workingDir, agentRPCRoot),
 			}, nil
 		}
 		return launchSpec{Command: "agent-rpc", Args: []string{"--bridge"}, WorkingDir: workingDir}, nil
@@ -178,8 +179,8 @@ func repoRootIfGoRun(command string, args []string, repoRoot string) string {
 	if repoRoot == "" || command != "go" || len(args) < 2 {
 		return ""
 	}
-	if args[0] == "run" && strings.HasPrefix(args[1], "./research/agent-rpc/") {
-		return repoRoot
+	if args[0] == "run" && args[1] == "./cmd/agent-rpc" {
+		return filepath.Join(repoRoot, "research", "agent-rpc")
 	}
 	return ""
 }
