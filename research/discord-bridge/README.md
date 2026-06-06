@@ -288,3 +288,5 @@ Start with:
 - `TICKET.md`
 - `UI-AGENT-MGMT-TICKET.md`
 - `ADMIN-COMMANDS-PROPOSAL.md`
+
+The current proposal direction for Discord command handling is: ordinary chat remains normal prompt input, while leading slash commands are intended to enter a bridge-controlled admin command layer first, where the bridge can resolve aliases, run bridge-native commands, and optionally allow permission-gated passthrough to Pi.

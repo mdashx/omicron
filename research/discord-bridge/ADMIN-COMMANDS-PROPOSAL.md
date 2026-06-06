@@ -1,16 +1,21 @@
-# Discord Bridge Proposal: Bridge-Owned Admin Commands
+# Discord Bridge Proposal: Bridge-Controlled Slash Commands
 
 ## Intent
 
-Add a bridge-owned administrative command surface for Discord that is separate from ordinary chat messages and separate from raw Pi slash-command passthrough.
+Add a bridge-controlled administrative command surface for Discord using slash-style commands.
 
-This proposal corresponds to option 3 from the current discussion:
+The key requirement is:
 
-- keep ordinary Discord chat routed as normal agent prompts
-- do not treat leading `/` messages as raw Pi terminal commands by default
-- introduce explicit bridge-owned admin commands that the bridge interprets itself
+- slash commands in Discord should not go straight to Pi by default
+- they should first enter a bridge-controlled admin command layer
+- the bridge can then:
+  - interpret bridge-native commands
+  - resolve aliases
+  - permission-gate access
+  - optionally pass through selected commands to Pi
+  - audit the result as bridge-owned behavior
 
-The bridge should remain the control plane.
+This preserves the familiar slash-command UX while keeping the bridge as the control plane.
 
 ---
 
@@ -18,187 +23,351 @@ The bridge should remain the control plane.
 
 Today, Discord messages are wrapped as normal agent prompts before being sent into `agent-rpc`.
 
-That means:
+That means a Discord message like:
 
-- a Discord message like `/new` is not a Pi slash command
-- it becomes ordinary user text inside a structured bridge wrapper
-- Pi sees it as content, not as terminal control input
+```text
+/new
+```
 
-That is currently correct for safety and determinism, but it creates a gap:
+is currently treated as ordinary user text, not as a Pi slash command.
 
-- operators still need a remote way to manage the bridge and its agents from Discord
-- some of those operations should be handled by the bridge itself, not by Pi
-- using raw Pi slash commands over Discord would blur the control boundary
+That is too limited for operator control, but sending slash commands directly to Pi without bridge mediation would also be incomplete because it would remove an important control point.
+
+We want the bridge to own the decision about what a slash command means.
 
 ---
 
 ## Proposal
 
-Introduce a dedicated bridge-owned admin command namespace.
+Treat leading slash commands as input to a bridge-controlled admin command process.
 
-These commands are parsed and executed by the Discord bridge runtime itself before normal agent routing.
+When the bridge sees a Discord message beginning with `/`, it should:
 
-They should not be forwarded to Pi as prompt text unless explicitly designed to do so.
+1. recognize it as a command candidate
+2. route it into a bridge-owned command parser/executor
+3. decide whether it is:
+   - a bridge-native command
+   - an alias for another command
+   - an allowed passthrough command
+   - a denied or unknown command
+4. enforce permissions
+5. execute or forward accordingly
+6. emit a bridge-authored response
+7. write an audit record
 
-This creates a separate control plane with properties that are:
-
-- explicit
-- bridge-enforced
-- auditable
-- safer than raw slash-command passthrough
-- easier to reason about than magical prompt handling
-
----
-
-## Command model
-
-### Suggested syntax
-
-Use a distinct prefix that clearly means “bridge command”, for example:
-
-```text
-!bridge ...
-```
-
-or possibly:
-
-```text
-.bridge ...
-```
-
-This proposal uses `!bridge` for examples.
-
-### Examples
-
-```text
-!bridge help
-!bridge status
-!bridge agents
-!bridge agent room-1504560627325079642 status
-!bridge agent room-1504560627325079642 restart
-!bridge bindings
-!bridge channel status
-!bridge logs room-1504560627325079642
-```
-
-### Why not raw `/...`
-
-Discord users often associate `/` with app commands or command-like syntax.
-
-Using `/...` as a hidden raw pass-through to Pi would be ambiguous and risky because:
-
-- it is not obvious whether the bridge or Pi owns the command
-- it weakens bridge/runtime boundaries
-- it increases the chance of accidental terminal-like control messages being sent to agents
-- it makes auditing and permissions less clear
-
-A bridge-specific prefix keeps the control surface visibly separate.
+So the slash UX is preserved, but the bridge remains in charge.
 
 ---
 
-## Scope of bridge-owned admin commands
+## Core model
 
-These commands should manage the bridge and its managed agents, not Pi internals directly.
+### Ordinary messages
 
-### Good candidates
+Messages that do **not** begin with `/` continue to follow the current path:
 
-#### Bridge status
+- normalized by the bridge
+- wrapped as bridge context
+- sent to the bound Pi agent as normal prompt content
 
-- `!bridge help`
-- `!bridge status`
-- `!bridge activity`
-- `!bridge bindings`
-- `!bridge agents`
+### Slash commands
 
-#### Managed agent lifecycle
+Messages that **do** begin with `/` are intercepted by the bridge admin command layer first.
 
-- `!bridge agent <id> status`
-- `!bridge agent <id> start`
-- `!bridge agent <id> stop`
-- `!bridge agent <id> restart`
-
-#### Channel/binding state
-
-- `!bridge bind <agentId> <channelId>`
-- `!bridge unbind <agentId>`
-- `!bridge channel status`
-
-#### Debug / inspection
-
-- `!bridge logs <agentId>`
-- `!bridge audit tail`
-- `!bridge queue <agentId>`
-
-#### Optional future commands
-
-- `!bridge rescan rooms`
-- `!bridge autostart on`
-- `!bridge autostart off`
-- `!bridge reconcile`
+They are not treated as ordinary user prompts by default.
 
 ---
 
-## Out of scope
+## Why this is the right compromise
 
-The bridge-owned admin surface should not initially try to expose arbitrary Pi slash commands such as:
+This design combines the benefits of both positions:
+
+### What it keeps
+
+- natural Discord slash-command UX
+- compatibility with OpenClaw-style expectations
+- the possibility of Pi slash-command passthrough
+
+### What it adds
+
+- bridge-owned aliasing
+- bridge-native commands
+- permission gates
+- explicit auditing
+- runtime control over what is and is not allowed
+
+This is better than both extremes:
+
+- better than treating `/...` as plain wrapped text
+- better than blindly forwarding every `/...` command straight to Pi
+
+---
+
+## Command classification
+
+A slash command received by the bridge should be classified into one of several categories.
+
+### 1. Bridge-native commands
+
+These are handled entirely by the bridge runtime.
+
+Examples:
+
+```text
+/status
+/agents
+/bindings
+/activity
+/agent room-1504560627325079642 status
+/agent room-1504560627325079642 restart
+/reconcile
+```
+
+These do not need Pi involvement.
+
+### 2. Aliases
+
+The bridge may rewrite or expand friendly commands into other bridge-native or passthrough commands.
+
+Examples:
+
+```text
+/rooms           -> /agents
+/room restart x  -> /agent x restart
+/health          -> /status
+```
+
+This gives the bridge a stable UX layer even if the underlying implementation changes.
+
+### 3. Allowed passthrough commands
+
+These are slash commands that the bridge is willing to forward to Pi after permission checks.
+
+Examples might include:
+
+```text
+/new
+/compact
+/state
+/model
+```
+
+But importantly, these commands would only be forwarded after bridge review.
+
+The bridge may:
+
+- allow some
+- deny some
+- rewrite some
+- scope some to particular users/channels/agents
+
+### 4. Denied or unknown commands
+
+If a slash command is not known, not allowed, or not authorized, the bridge should reject it explicitly with a bridge-authored response.
+
+---
+
+## Suggested routing behavior
+
+When a Discord message arrives:
+
+1. if it does not start with `/`, use the normal prompt-routing path
+2. if it starts with `/`, route it to the bridge command layer
+3. parse the command
+4. check authorization
+5. classify it as:
+   - bridge-native
+   - alias
+   - allowed passthrough
+   - denied/unknown
+6. execute the corresponding action
+7. send a bridge-authored response
+8. log the action in the audit trail
+
+This should be mutually exclusive with ordinary prompt routing.
+
+So:
+
+- slash commands should not also be forwarded as normal chat content
+
+---
+
+## Bridge-controlled admin process
+
+The phrase “admin process” does not need to imply a separate OS process immediately.
+
+It can begin as a bridge-owned command handler in the bridge runtime.
+
+Conceptually, though, it should act like a separate control-plane subsystem with:
+
+- parsing
+- classification
+- authorization
+- dispatch
+- reply formatting
+- audit logging
+
+Later, this could become a more distinct internal module or service boundary if useful.
+
+---
+
+## Suggested syntax
+
+Use direct slash syntax as the visible user-facing command language.
+
+Examples:
+
+```text
+/help
+/status
+/agents
+/bindings
+/agent room-1504560627325079642 status
+/agent room-1504560627325079642 restart
+/new
+/state
+```
+
+The bridge decides what each means.
+
+This preserves the UX you want while still keeping interpretation under bridge control.
+
+---
+
+## Permissions model
+
+Slash commands should be permission-gated in bridge runtime code.
+
+The bridge should not assume every user can invoke every command.
+
+Possible permission dimensions:
+
+- Discord user id
+- channel id
+- guild id
+- DM vs guild channel
+- command class
+- target agent
+
+### Suggested first cut
+
+A simple first pass could classify commands into permission tiers:
+
+#### Read-only bridge commands
+Examples:
+
+- `/help`
+- `/status`
+- `/agents`
+- `/bindings`
+- `/activity`
+
+These might be allowed more broadly.
+
+#### Mutating bridge commands
+Examples:
+
+- `/agent <id> start`
+- `/agent <id> stop`
+- `/agent <id> restart`
+- `/bind ...`
+- `/reconcile`
+
+These should be more restricted.
+
+#### Pi passthrough commands
+Examples:
 
 - `/new`
 - `/compact`
 - `/state`
 - `/model`
 
-Those are Pi runtime concerns, not bridge control-plane concerns.
-
-If later needed, a very narrow explicit bridge command could request some equivalent high-level lifecycle action, but the bridge should remain the owner of the policy and interpretation.
+These should likely be gated separately from bridge-native commands because they affect agent session/runtime state directly.
 
 ---
 
-## Permissions model
+## Passthrough policy
 
-Bridge admin commands should not be available to every Discord user by default.
+The bridge should not automatically pass through every slash command.
 
-The bridge should check permissions in runtime code before executing admin commands.
+Instead, it should define an explicit passthrough policy.
 
-Possible policies:
+For example:
 
-- allow only configured Discord user ids
-- allow only configured channels
-- allow only DMs from paired/approved users
-- optionally allow specific guild roles later
+- allowlisted commands only
+- per-channel or per-agent allowlists
+- optionally per-user allowlists
 
-A first implementation can stay simple:
+Examples of policy questions:
 
-- only permit bridge admin commands from approved user ids already present in the bridge/channel config
-- optionally restrict them to specific channels or DMs
+- Is `/new` allowed remotely at all?
+- Is `/compact` allowed in shared channels?
+- Is `/model` allowed only for admins?
+- Should `/state` be visible to everyone or only operators?
 
-The important part is that permission is bridge-owned and enforced in code.
+These are bridge policy decisions.
 
 ---
 
-## Routing behavior
+## Alias resolution
 
-When a Discord message arrives:
+Alias support is one of the best reasons to keep slash commands bridge-controlled.
 
-1. the bridge checks whether it matches the admin-command prefix
-2. if not, it follows normal inbound agent routing
-3. if yes, the bridge parses and authorizes it
-4. the bridge executes the command itself
-5. the bridge replies with a bridge-authored response
-6. the bridge records the action in the audit log
+Examples:
 
-This should be mutually exclusive with normal agent prompt routing for that message.
+```text
+/restart              -> /agent <bound-agent> restart
+/reset                -> /new
+/health               -> /status
+/queue                -> /agent <bound-agent> queue
+```
 
-In other words:
+This lets the bridge present a cleaner command language without exposing raw implementation details.
 
-- admin commands do not also get forwarded to the bound agent
+It also gives room for room-specific semantics later.
+
+---
+
+## Bridge-native command examples
+
+A strong initial set of bridge-native slash commands could be:
+
+- `/help`
+- `/status`
+- `/agents`
+- `/bindings`
+- `/activity`
+- `/agent <id> status`
+- `/agent <id> restart`
+- `/agent <id> stop`
+- `/agent <id> start`
+
+These align directly with the web UI and HTTP admin actions.
+
+---
+
+## Pi passthrough examples
+
+A narrow initial set of passthrough commands could be:
+
+- `/new`
+- `/compact`
+- `/state`
+
+Even here, the bridge should remain responsible for:
+
+- deciding whether passthrough is allowed
+- selecting the target agent/session
+- capturing the outcome for audit
+- formatting any errors or denials cleanly
 
 ---
 
 ## Response shape
 
-Bridge-owned admin command replies should be visibly bridge-authored.
+All slash-command responses should be visibly bridge-authored.
 
-For example:
+Example:
 
 ```text
 [discord-bridge]
@@ -210,80 +379,64 @@ Queue: 0
 Last activity: 12s ago
 ```
 
-This helps users understand that the response came from the bridge control plane, not from Pi.
+For passthrough commands, the bridge may still note that the command was forwarded.
 
----
+Example:
 
-## UI and API alignment
+```text
+[discord-bridge]
+Forwarded to Pi: /new
+Result: session reset requested
+```
 
-The new Discord admin command surface should align with the bridge web UI and HTTP actions.
-
-That means bridge admin commands should map onto the same conceptual operations as the UI:
-
-- overview/status
-- managed agents
-- bindings
-- activity
-- lifecycle actions
-
-This reduces drift between:
-
-- local web UI
-- HTTP control actions
-- Discord-side operator control
-
-The bridge should not invent a completely separate hidden behavior model for Discord.
+This avoids ambiguity about whether the reply came from the bridge or from ordinary agent chat.
 
 ---
 
 ## Audit / observability
 
-Every admin command should produce bridge audit records such as:
+Every slash command should generate bridge audit records such as:
 
 - `bridge.admin.received`
+- `bridge.admin.alias_resolved`
 - `bridge.admin.authorized`
 - `bridge.admin.denied`
 - `bridge.admin.executed`
+- `bridge.admin.forwarded`
 - `bridge.admin.failed`
 
 Payloads should include at least:
 
 - author id
 - author name
-- channel id
 - guild id
-- command text or parsed command
-- result status
+- channel id
+- raw command text
+- normalized/parsed command
+- classification
+- target agent
+- result
 
-This is a strong advantage over raw Pi slash-command passthrough.
+This is a major advantage over naive direct passthrough.
 
 ---
 
-## Why this is preferable to raw Pi slash passthrough
+## UI and API alignment
 
-### 1. Better separation of concerns
+The bridge-controlled slash-command surface should map onto the same conceptual operations as the bridge UI and HTTP API.
 
-The bridge owns bridge control.
-Pi owns model/session work.
+That means:
 
-### 2. Safer remote control
+- `/status` aligns with overview
+- `/agents` aligns with managed agents
+- `/bindings` aligns with bindings
+- `/agent <id> restart` aligns with lifecycle controls
 
-The bridge can whitelist exact operations instead of allowing arbitrary command-like input.
+This keeps the operator experience coherent across:
 
-### 3. Better auditability
-
-Bridge actions are explicit and structured.
-
-### 4. Easier permissions
-
-The bridge can gate admin commands independently of agent prompting.
-
-### 5. Better UX
-
-Users can distinguish:
-
-- asking the agent to do work
-- asking the bridge to manage infrastructure
+- Discord
+- web UI
+- HTTP control endpoints
 
 ---
 
@@ -291,34 +444,47 @@ Users can distinguish:
 
 ### Pros
 
-- safer
-- clearer
-- easier to document
-- runtime-enforced
-- easier to align with the UI and API
+- preserves familiar slash-command UX
+- keeps the bridge in control
+- enables aliases
+- enables bridge-native commands
+- supports explicit passthrough policy
+- improves auditability
+- improves permission handling
 
 ### Cons
 
-- not a direct substitute for every Pi slash command
-- requires bridge-specific command parsing
-- introduces another operator-facing command surface to maintain
+- requires a command parser/classifier in the bridge
+- requires clear command documentation
+- introduces some policy complexity around passthrough
 
-These tradeoffs are acceptable if the goal is a trustworthy bridge control plane.
+These are acceptable tradeoffs for a trustworthy control plane.
 
 ---
 
 ## Suggested first milestone
 
-Implement a narrow first set of bridge-owned admin commands:
+Implement:
 
-- `!bridge help`
-- `!bridge status`
-- `!bridge agents`
-- `!bridge bindings`
-- `!bridge agent <id> status`
-- `!bridge agent <id> restart`
+### Bridge-native
+- `/help`
+- `/status`
+- `/agents`
+- `/bindings`
+- `/agent <id> status`
+- `/agent <id> restart`
 
-This is enough to prove the pattern without overextending the parser.
+### Passthrough
+- `/new`
+- `/state`
+
+### Runtime rules
+- slash commands go to bridge command handling first
+- passthrough uses an explicit allowlist
+- permissions are checked in bridge code
+- results are bridge-authored and audited
+
+This is enough to prove the shape without needing the full command universe immediately.
 
 ---
 
@@ -326,25 +492,27 @@ This is enough to prove the pattern without overextending the parser.
 
 This proposal is satisfied when:
 
-- the bridge defines a dedicated admin command prefix
-- admin commands are parsed by the bridge, not forwarded as agent prompts
-- permissions are enforced in bridge runtime code
-- responses are bridge-authored and clearly labeled
-- actions are logged in the bridge audit trail
-- the initial command set maps cleanly onto existing UI/HTTP concepts
+- slash commands are recognized by the bridge as a separate control path
+- the bridge parses and classifies slash commands before any forwarding
+- bridge-native commands are executed by the bridge itself
+- aliases can be resolved by the bridge
+- passthrough commands are explicit and permission-gated
+- slash command actions are audited in bridge runtime logs
+- slash-command behavior aligns with the web UI and HTTP admin model
 
 ---
 
 ## Summary
 
-Do not overload ordinary Discord chat or raw `/...` messages with hidden bridge semantics.
+Use slash commands directly in Discord, but do not let them bypass the bridge.
 
-Instead, add a bridge-owned admin command surface.
+Instead:
 
-This preserves:
+- slash commands enter a bridge-controlled admin command layer
+- the bridge decides whether each command is:
+  - bridge-native
+  - an alias
+  - an allowed passthrough
+  - denied
 
-- clean bridge/runtime boundaries
-- safer operations
-- clearer user intent
-- better auditability
-- future alignment between Discord control, web UI, and HTTP APIs
+This gives you the familiar OpenClaw-style slash UX while preserving the bridge as the owner of permissions, aliases, policy, audit, and control-plane semantics.
