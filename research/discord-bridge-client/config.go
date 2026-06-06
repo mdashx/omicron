@@ -58,7 +58,7 @@ func LoadConfig() (Config, error) {
 		OutputMode:           "pi-jsonl",
 		PiSessionRoot:        expandPath("~/.pi/agent/sessions"),
 		PiSessionArchiveRoot: expandPath("~/.pi/agent/session-archive"),
-		PiLogPreference:      "session-archive",
+		PiLogPreference:      "session",
 		PTYInputLogPath:      filepath.Join(root, "pty-input.log"),
 		PTYOutputLogPath:     filepath.Join(root, "pty-output.log"),
 	}

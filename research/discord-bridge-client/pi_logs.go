@@ -48,25 +48,18 @@ func (m *piOutputMonitor) Enabled() bool {
 }
 
 func (m *piOutputMonitor) Resolve() PiStructuredOutputSource {
-	m.mu.Lock()
-	if m.source.Active {
-		defer m.mu.Unlock()
-		return m.source
-	}
-	m.mu.Unlock()
-
 	source := PiStructuredOutputSource{
 		AgentID:      m.cfg.AgentID,
 		Mode:         "pi-jsonl",
 		RegisteredAt: time.Now().UTC(),
 	}
-	if archive := m.findLatestArchiveFile(); archive != "" {
-		source.ArchiveFile = archive
-	}
 	if session := m.findLatestSessionFile(); session != "" {
 		source.SessionFile = session
 	}
-	source.Active = source.ArchiveFile != "" || source.SessionFile != ""
+	if archive := m.findLatestArchiveFile(); archive != "" {
+		source.ArchiveFile = archive
+	}
+	source.Active = source.SessionFile != "" || source.ArchiveFile != ""
 
 	m.mu.Lock()
 	m.source = source
@@ -77,11 +70,11 @@ func (m *piOutputMonitor) Resolve() PiStructuredOutputSource {
 func (m *piOutputMonitor) Snapshot() piOutputCursor {
 	source := m.Resolve()
 	cursor := piOutputCursor{archivePath: source.ArchiveFile, sessionPath: source.SessionFile}
-	if source.ArchiveFile != "" {
-		cursor.archiveOffset = fileSize(source.ArchiveFile)
-	}
 	if source.SessionFile != "" {
 		cursor.sessionOffset = fileSize(source.SessionFile)
+	}
+	if source.ArchiveFile != "" {
+		cursor.archiveOffset = fileSize(source.ArchiveFile)
 	}
 	return cursor
 }
@@ -131,22 +124,22 @@ func (m *piOutputMonitor) WaitForReply(cursor piOutputCursor, idle time.Duration
 			}
 		}
 		if sawAny && time.Since(lastActivity) >= idle {
-			if archiveText != "" {
-				return archiveText, true
-			}
 			if sessionText != "" {
 				return sessionText, true
+			}
+			if archiveText != "" {
+				return archiveText, true
 			}
 		}
 		if time.Now().After(deadline) {
 			break
 		}
 	}
-	if archiveText != "" {
-		return archiveText, true
-	}
 	if sessionText != "" {
 		return sessionText, true
+	}
+	if archiveText != "" {
+		return archiveText, true
 	}
 	return "", false
 }

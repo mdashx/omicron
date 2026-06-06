@@ -137,11 +137,11 @@ func (h *Harness) handleEvent(evt InboundEvent) error {
 
 func (h *Harness) buildStructuredReplyNotice() string {
 	source := h.currentOutputSource()
-	path := strings.TrimSpace(source.ArchiveFile)
-	sourceKind := "session-archive"
+	path := strings.TrimSpace(source.SessionFile)
+	sourceKind := "session"
 	if path == "" {
-		path = strings.TrimSpace(source.SessionFile)
-		sourceKind = "session"
+		path = strings.TrimSpace(source.ArchiveFile)
+		sourceKind = "session-archive"
 	}
 	if path == "" {
 		return "agent replied\noutputMode: pi-jsonl\nlogSource: unavailable"
