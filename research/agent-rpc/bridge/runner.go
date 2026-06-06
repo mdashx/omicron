@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -155,7 +156,7 @@ func (r *Runner) handleSlashPassthrough(ctx context.Context, event InboundEvent)
 		if err != nil {
 			return err
 		}
-		content = fmt.Sprintf("[discord-bridge]\nForwarded to Pi: /state\n\nSession: %s\nFile: %s\nStreaming: %v\nPending messages: %d\nThinking: %s", state.SessionID, state.SessionFile, state.IsStreaming, state.PendingMessages, state.ThinkingLevel)
+		content = fmt.Sprintf("[discord-bridge]\nForwarded to Pi: /state\n\nSession: %s\nFile: %s\nModel: %s\nStreaming: %v\nPending messages: %d\nThinking: %s", state.SessionID, state.SessionFile, formatModel(state.RawModel), state.IsStreaming, state.PendingMessages, state.ThinkingLevel)
 	default:
 		content = fmt.Sprintf("[discord-bridge]\nPassthrough not implemented for: %s", event.Content)
 	}
@@ -208,4 +209,33 @@ func formatBridgeMessage(event InboundEvent) string {
 	b.WriteString("Message: ")
 	b.WriteString(event.Content)
 	return strings.TrimSpace(b.String())
+}
+
+func formatModel(raw []byte) string {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return "unknown"
+	}
+	var payload struct {
+		Provider string `json:"provider"`
+		ID       string `json:"id"`
+		ModelID  string `json:"modelId"`
+		Name     string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		id := strings.TrimSpace(payload.ID)
+		if id == "" {
+			id = strings.TrimSpace(payload.ModelID)
+		}
+		provider := strings.TrimSpace(payload.Provider)
+		if provider != "" && id != "" {
+			return provider + "/" + id
+		}
+		if id != "" {
+			return id
+		}
+		if strings.TrimSpace(payload.Name) != "" {
+			return strings.TrimSpace(payload.Name)
+		}
+	}
+	return strings.TrimSpace(string(raw))
 }
