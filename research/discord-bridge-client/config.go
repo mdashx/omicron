@@ -11,44 +11,52 @@ import (
 )
 
 type Config struct {
-	Enabled          bool          `json:"enabled"`
-	BridgeURL        string        `json:"bridgeUrl"`
-	AgentID          string        `json:"agentId"`
-	CredsRef         string        `json:"credsRef"`
-	GuildID          string        `json:"guildId,omitempty"`
-	ChannelID        string        `json:"channelId"`
-	Command          string        `json:"command"`
-	CommandArgs      []string      `json:"commandArgs,omitempty"`
-	Cwd              string        `json:"cwd"`
-	PollInterval     time.Duration `json:"pollIntervalMs"`
-	IdleCompleteWait time.Duration `json:"idleCompleteMs"`
-	Cols             uint16        `json:"cols"`
-	Rows             uint16        `json:"rows"`
-	StateRoot        string        `json:"stateRoot"`
-	StatePath        string        `json:"statePath"`
-	QueueReaction    string        `json:"queueReaction"`
-	ThinkingReaction string        `json:"thinkingReaction"`
-	FinalReaction    string        `json:"finalReaction"`
+	Enabled              bool          `json:"enabled"`
+	BridgeURL            string        `json:"bridgeUrl"`
+	AgentID              string        `json:"agentId"`
+	CredsRef             string        `json:"credsRef"`
+	GuildID              string        `json:"guildId,omitempty"`
+	ChannelID            string        `json:"channelId"`
+	Command              string        `json:"command"`
+	CommandArgs          []string      `json:"commandArgs,omitempty"`
+	Cwd                  string        `json:"cwd"`
+	PollInterval         time.Duration `json:"pollIntervalMs"`
+	IdleCompleteWait     time.Duration `json:"idleCompleteMs"`
+	Cols                 uint16        `json:"cols"`
+	Rows                 uint16        `json:"rows"`
+	StateRoot            string        `json:"stateRoot"`
+	StatePath            string        `json:"statePath"`
+	QueueReaction        string        `json:"queueReaction"`
+	ThinkingReaction     string        `json:"thinkingReaction"`
+	FinalReaction        string        `json:"finalReaction"`
+	OutputMode           string        `json:"outputMode"`
+	PiSessionRoot        string        `json:"piSessionRoot"`
+	PiSessionArchiveRoot string        `json:"piSessionArchiveRoot"`
+	PiLogPreference      string        `json:"piLogPreference"`
 }
 
 func LoadConfig() (Config, error) {
 	root := expandPath("~/.pi/discord-bridge-client")
 	cwd, _ := os.Getwd()
 	cfg := Config{
-		Enabled:          true,
-		BridgeURL:        "http://127.0.0.1:19444",
-		CredsRef:         "local-session",
-		Command:          "pi",
-		Cwd:              cwd,
-		PollInterval:     1500 * time.Millisecond,
-		IdleCompleteWait: 2500 * time.Millisecond,
-		Cols:             120,
-		Rows:             40,
-		StateRoot:        root,
-		StatePath:        filepath.Join(root, "state.json"),
-		QueueReaction:    "⏳",
-		ThinkingReaction: "💭",
-		FinalReaction:    "✅",
+		Enabled:              true,
+		BridgeURL:            "http://127.0.0.1:19444",
+		CredsRef:             "local-session",
+		Command:              "pi",
+		Cwd:                  cwd,
+		PollInterval:         1500 * time.Millisecond,
+		IdleCompleteWait:     2500 * time.Millisecond,
+		Cols:                 120,
+		Rows:                 40,
+		StateRoot:            root,
+		StatePath:            filepath.Join(root, "state.json"),
+		QueueReaction:        "⏳",
+		ThinkingReaction:     "💭",
+		FinalReaction:        "✅",
+		OutputMode:           "pi-jsonl",
+		PiSessionRoot:        expandPath("~/.pi/agent/sessions"),
+		PiSessionArchiveRoot: expandPath("~/.pi/agent/session-archive"),
+		PiLogPreference:      "session-archive",
 	}
 	configPath := expandPath(envOr("DISCORD_BRIDGE_CLIENT_CONFIG", "~/.pi/discord-bridge-client/config.json"))
 	if raw, err := os.ReadFile(configPath); err == nil {
@@ -68,6 +76,8 @@ func LoadConfig() (Config, error) {
 	cfg.StateRoot = expandPath(cfg.StateRoot)
 	cfg.StatePath = expandPath(cfg.StatePath)
 	cfg.Cwd = expandPath(cfg.Cwd)
+	cfg.PiSessionRoot = expandPath(cfg.PiSessionRoot)
+	cfg.PiSessionArchiveRoot = expandPath(cfg.PiSessionArchiveRoot)
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -86,6 +96,9 @@ func (c Config) Validate() error {
 	}
 	if c.PollInterval <= 0 || c.IdleCompleteWait <= 0 {
 		return errors.New("poll and idle completion timings must be > 0")
+	}
+	if c.OutputMode == "" {
+		return errors.New("outputMode is required")
 	}
 	if c.Cols == 0 || c.Rows == 0 {
 		return errors.New("pty cols and rows must be > 0")
@@ -179,5 +192,17 @@ func (c *Config) applyEnvOverrides(cwd string) {
 	}
 	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_FINAL_REACTION")); value != "" {
 		c.FinalReaction = value
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_OUTPUT_MODE")); value != "" {
+		c.OutputMode = value
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_SESSION_ROOT")); value != "" {
+		c.PiSessionRoot = expandPath(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_SESSION_ARCHIVE_ROOT")); value != "" {
+		c.PiSessionArchiveRoot = expandPath(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_PI_LOG_PREFERENCE")); value != "" {
+		c.PiLogPreference = value
 	}
 }

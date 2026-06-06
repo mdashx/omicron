@@ -56,10 +56,20 @@ type CompleteRequest struct {
 	FinalReaction string `json:"finalReaction,omitempty"`
 }
 
+type PiStructuredOutputSource struct {
+	AgentID      string    `json:"agentId"`
+	Mode         string    `json:"mode"`
+	SessionFile  string    `json:"sessionFile,omitempty"`
+	ArchiveFile  string    `json:"archiveFile,omitempty"`
+	RegisteredAt time.Time `json:"registeredAt,omitempty"`
+	Active       bool      `json:"active"`
+}
+
 type HarnessState struct {
-	ProcessedEventIDs map[string]bool `json:"processedEventIds"`
-	LastJoinAt        time.Time       `json:"lastJoinAt,omitempty"`
-	LastMessageID     string          `json:"lastMessageId,omitempty"`
+	ProcessedEventIDs map[string]bool          `json:"processedEventIds"`
+	LastJoinAt        time.Time                `json:"lastJoinAt,omitempty"`
+	LastMessageID     string                   `json:"lastMessageId,omitempty"`
+	OutputSource      PiStructuredOutputSource `json:"outputSource,omitempty"`
 }
 
 type CompletionResult struct {

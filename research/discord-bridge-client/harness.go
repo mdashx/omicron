@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,6 +13,7 @@ type Harness struct {
 	cfg    Config
 	client *BridgeClient
 	agent  *PTYAgent
+	output *piOutputMonitor
 	mu     sync.Mutex
 	state  HarnessState
 }
@@ -56,6 +58,18 @@ func (h *Harness) Run(ctx context.Context) error {
 		return err
 	}
 	h.agent = agent
+	h.output = newPiOutputMonitor(h.cfg, agent.StartedAt())
+	if h.output.Enabled() {
+		source := h.output.Resolve()
+		h.mu.Lock()
+		h.state.OutputSource = source
+		if err := saveState(h.cfg.StatePath, h.state); err != nil {
+			h.mu.Unlock()
+			return err
+		}
+		h.mu.Unlock()
+		log.Printf("pi output source agent=%s archive=%s session=%s", h.cfg.AgentID, source.ArchiveFile, source.SessionFile)
+	}
 	defer h.agent.Close()
 	log.Printf("bridge client joined bridge=%s agent=%s channel=%s cmd=%s", h.cfg.BridgeURL, h.cfg.AgentID, h.cfg.ChannelID, h.cfg.Command)
 	ticker := time.NewTicker(h.cfg.PollInterval)
@@ -95,10 +109,15 @@ func (h *Harness) handleEvent(evt InboundEvent) error {
 	if err := h.client.SetStatus(h.cfg.AgentID, StatusUpdateRequest{MessageID: evt.MessageID, Reaction: h.cfg.ThinkingReaction}); err != nil {
 		return err
 	}
+	var cursor piOutputCursor
+	useStructuredOutput := h.output != nil && h.output.Enabled()
+	if useStructuredOutput {
+		cursor = h.output.Snapshot()
+	}
 	if err := h.agent.Inject(RenderBridgePrompt(evt)); err != nil {
 		return err
 	}
-	result, err := h.agent.WaitForTurnResult(h.cfg.IdleCompleteWait)
+	result, err := h.waitForCompletion(cursor, useStructuredOutput)
 	if err != nil {
 		return err
 	}
@@ -109,6 +128,31 @@ func (h *Harness) handleEvent(evt InboundEvent) error {
 		return err
 	}
 	return h.markProcessed(evt.EventID, evt.MessageID)
+}
+
+func (h *Harness) waitForCompletion(cursor piOutputCursor, useStructuredOutput bool) (CompletionResult, error) {
+	if useStructuredOutput {
+		h.syncOutputSource()
+		if text, ok := h.output.WaitForReply(cursor, h.cfg.IdleCompleteWait); ok && strings.TrimSpace(text) != "" {
+			h.syncOutputSource()
+			return CompletionResult{Text: strings.TrimSpace(text), FinalReaction: h.cfg.FinalReaction}, nil
+		}
+	}
+	return h.agent.WaitForTurnResult(h.cfg.IdleCompleteWait)
+}
+
+func (h *Harness) syncOutputSource() {
+	if h.output == nil || !h.output.Enabled() {
+		return
+	}
+	source := h.output.Resolve()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.state.OutputSource == source {
+		return
+	}
+	h.state.OutputSource = source
+	_ = saveState(h.cfg.StatePath, h.state)
 }
 
 func (h *Harness) isProcessed(eventID string) bool {

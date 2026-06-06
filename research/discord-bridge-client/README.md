@@ -51,7 +51,7 @@ export DISCORD_BRIDGE_IDLE_COMPLETE_MS=2500
 
 ## Notes
 
-This is a first PTY-based harness prototype. Completion detection is intentionally simple: the harness watches PTY output and treats the turn as complete after a quiet period.
+This is a PTY-based harness prototype. Inbound Discord work is still injected through the PTY so Pi behaves like a normal terminal app, but for Pi-backed agents the harness now prefers Pi JSONL session/archive logs as the authoritative outbound reply source. PTY idle-based completion remains as the fallback path.
 
 Research docs:
 - `SPEC.md`

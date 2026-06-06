@@ -18,6 +18,7 @@ type PTYAgent struct {
 	cfg        Config
 	cmd        *exec.Cmd
 	ptyFile    *os.File
+	startedAt  time.Time
 	mu         sync.Mutex
 	outputBuf  bytes.Buffer
 	lastOutput time.Time
@@ -32,7 +33,8 @@ func StartPTYAgent(cfg Config) (*PTYAgent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start pty: %w", err)
 	}
-	a := &PTYAgent{cfg: cfg, cmd: cmd, ptyFile: f, lastOutput: time.Now()}
+	startedAt := time.Now().UTC()
+	a := &PTYAgent{cfg: cfg, cmd: cmd, ptyFile: f, startedAt: startedAt, lastOutput: startedAt}
 	go a.captureOutput()
 	return a, nil
 }
@@ -81,6 +83,10 @@ func (a *PTYAgent) WaitForTurnResult(idle time.Duration) (CompletionResult, erro
 		}
 	}
 	return CompletionResult{}, nil
+}
+
+func (a *PTYAgent) StartedAt() time.Time {
+	return a.startedAt
 }
 
 func (a *PTYAgent) Close() error {
