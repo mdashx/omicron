@@ -39,7 +39,7 @@ func parseAdminCommand(content string) (adminCommand, error) {
 	case "rooms":
 		cmd.ResolvedFrom = cmd.Name
 		cmd.Name = "agents"
-	case "new", "state", "compact", "model":
+	case "new", "state", "compact":
 		cmd.IsPassthrough = true
 		cmd.PassthroughCmd = content
 	}
@@ -77,6 +77,26 @@ func (s *BridgeService) handleSlashCommand(m *discordgo.MessageCreate, hasBindin
 			"from":      cmd.ResolvedFrom,
 			"to":        cmd.Name,
 		})
+	}
+	if cmd.Name == "model" {
+		agentID := ""
+		if len(cmd.Args) > 0 {
+			agentID = strings.TrimSpace(cmd.Args[0])
+		} else if hasBinding {
+			agentID = binding.AgentID
+		}
+		if agentID == "" {
+			_ = s.setManagedReaction(m.ChannelID, m.ID, failureReaction(s.cfg))
+			_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Command failed.", "No target agent was specified and this channel has no bound room agent."), m.ID)
+			return
+		}
+		if err := s.openModelPicker(m, agentID); err != nil {
+			_ = s.setManagedReaction(m.ChannelID, m.ID, failureReaction(s.cfg))
+			_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Command failed.", err.Error()), m.ID)
+			return
+		}
+		_ = s.setManagedReaction(m.ChannelID, m.ID, successReaction(s.cfg))
+		return
 	}
 
 	if cmd.IsPassthrough {
@@ -153,7 +173,7 @@ func (s *BridgeService) executeAdminCommand(cmd adminCommand, hasBinding bool, b
 	switch cmd.Name {
 	case "help":
 		return bridgeResponse("Available bridge slash commands",
-			"/help\n/status\n/agents\n/bindings\n/activity\n/agent <id> status\n/agent <id> start\n/agent <id> stop\n/agent <id> restart\n/health (alias for /status)\n/rooms (alias for /agents)\n/new, /state (enabled passthrough)\n/compact, /model (recognized passthrough candidates)"), nil
+			"/help\n/status\n/agents\n/bindings\n/activity\n/model [agentId]\n/agent <id> status\n/agent <id> start\n/agent <id> stop\n/agent <id> restart\n/health (alias for /status)\n/rooms (alias for /agents)\n/new, /state (enabled passthrough)\n/compact (recognized passthrough candidate)"), nil
 	case "status":
 		stats := s.overviewStats()
 		return bridgeResponse("Bridge status",

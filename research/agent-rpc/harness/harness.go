@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -184,6 +185,22 @@ func (h *Harness) GetState(ctx context.Context) (State, error) {
 
 func (h *Harness) NewSession(ctx context.Context) error {
 	resp, err := h.sendCommand(ctx, map[string]any{"type": "new_session"})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	_, err = h.GetState(ctx)
+	return err
+}
+
+func (h *Harness) SetModel(ctx context.Context, model string) error {
+	parts := strings.SplitN(model, "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return fmt.Errorf("model must be provider/modelId: %s", model)
+	}
+	resp, err := h.sendCommand(ctx, map[string]any{"type": "set_model", "provider": parts[0], "modelId": parts[1]})
 	if err != nil {
 		return err
 	}

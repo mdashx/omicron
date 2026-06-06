@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,27 +35,33 @@ func main() {
 	}
 }
 
+type ModelOption struct {
+	ID    string `json:"id"`
+	Alias string `json:"alias,omitempty"`
+}
+
 type Config struct {
-	Enabled                  bool     `json:"enabled"`
-	BotToken                 string   `json:"botToken"`
-	BridgeID                 string   `json:"bridgeId"`
-	Host                     string   `json:"host"`
-	Port                     int      `json:"port"`
-	StorageRoot              string   `json:"storageRoot"`
-	LogsRoot                 string   `json:"logsRoot"`
-	DownloadsRoot            string   `json:"downloadsRoot"`
-	AuditPath                string   `json:"auditPath"`
-	StatePath                string   `json:"statePath"`
-	AckReaction              string   `json:"ackReaction"`
-	StatusReactions          []string `json:"statusReactions"`
-	FinalReactionChoices     []string `json:"finalReactionChoices"`
-	DefaultGuildID           string   `json:"defaultGuildId,omitempty"`
-	AssignableChannelIDs     []string `json:"assignableChannelIds,omitempty"`
-	AdminUserIDs             []string `json:"adminUserIds,omitempty"`
-	AutoStartEnabledChannels bool     `json:"autoStartEnabledChannels,omitempty"`
-	AutoStartAgentPrefix     string   `json:"autoStartAgentPrefix,omitempty"`
-	OpenClawConfigPath       string   `json:"openClawConfigPath,omitempty"`
-	DryRun                   bool     `json:"dryRun"`
+	Enabled                  bool          `json:"enabled"`
+	BotToken                 string        `json:"botToken"`
+	BridgeID                 string        `json:"bridgeId"`
+	Host                     string        `json:"host"`
+	Port                     int           `json:"port"`
+	StorageRoot              string        `json:"storageRoot"`
+	LogsRoot                 string        `json:"logsRoot"`
+	DownloadsRoot            string        `json:"downloadsRoot"`
+	AuditPath                string        `json:"auditPath"`
+	StatePath                string        `json:"statePath"`
+	AckReaction              string        `json:"ackReaction"`
+	StatusReactions          []string      `json:"statusReactions"`
+	FinalReactionChoices     []string      `json:"finalReactionChoices"`
+	DefaultGuildID           string        `json:"defaultGuildId,omitempty"`
+	AssignableChannelIDs     []string      `json:"assignableChannelIds,omitempty"`
+	AdminUserIDs             []string      `json:"adminUserIds,omitempty"`
+	AvailableModels          []ModelOption `json:"availableModels,omitempty"`
+	AutoStartEnabledChannels bool          `json:"autoStartEnabledChannels,omitempty"`
+	AutoStartAgentPrefix     string        `json:"autoStartAgentPrefix,omitempty"`
+	OpenClawConfigPath       string        `json:"openClawConfigPath,omitempty"`
+	DryRun                   bool          `json:"dryRun"`
 }
 
 func LoadConfig() (Config, error) {
@@ -139,7 +146,15 @@ func (c *Config) applyAutoAssignmentDefaults() {
 	type discordCfg struct {
 		Guilds map[string]guildEntry `json:"guilds"`
 	}
+	type modelEntry struct {
+		Alias string `json:"alias"`
+	}
 	type openClawCfg struct {
+		Agents struct {
+			Defaults struct {
+				Models map[string]modelEntry `json:"models"`
+			} `json:"defaults"`
+		} `json:"agents"`
 		Channels struct {
 			Discord discordCfg `json:"discord"`
 		} `json:"channels"`
@@ -179,6 +194,18 @@ func (c *Config) applyAutoAssignmentDefaults() {
 				}
 			}
 		}
+	}
+	if len(c.AvailableModels) == 0 {
+		for id, entry := range oc.Agents.Defaults.Models {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			c.AvailableModels = append(c.AvailableModels, ModelOption{ID: id, Alias: strings.TrimSpace(entry.Alias)})
+		}
+		slices.SortFunc(c.AvailableModels, func(a, b ModelOption) int {
+			return strings.Compare(a.ID, b.ID)
+		})
 	}
 }
 
@@ -266,16 +293,25 @@ type LaunchedAgent struct {
 	State      string    `json:"state"`
 }
 
+type pendingModelPicker struct {
+	UserID         string
+	AgentID        string
+	ChannelID      string
+	ReplyToMessage string
+	CreatedAt      time.Time
+}
+
 type BridgeService struct {
-	cfg            Config
-	envelope       Envelope
-	dg             *discordgo.Session
-	httpServer     *http.Server
-	started        time.Time
-	state          PersistedState
-	queues         map[string][]InboundEvent
-	launchedAgents map[string]LaunchedAgent
-	mu             sync.Mutex
+	cfg                 Config
+	envelope            Envelope
+	dg                  *discordgo.Session
+	httpServer          *http.Server
+	started             time.Time
+	state               PersistedState
+	queues              map[string][]InboundEvent
+	launchedAgents      map[string]LaunchedAgent
+	pendingModelPickers map[string]pendingModelPicker
+	mu                  sync.Mutex
 }
 
 func NewBridgeService(cfg Config) (*BridgeService, error) {
@@ -289,11 +325,12 @@ func NewBridgeService(cfg Config) (*BridgeService, error) {
 		return nil, err
 	}
 	s := &BridgeService{
-		cfg:            cfg,
-		started:        time.Now().UTC(),
-		state:          state,
-		queues:         map[string][]InboundEvent{},
-		launchedAgents: map[string]LaunchedAgent{},
+		cfg:                 cfg,
+		started:             time.Now().UTC(),
+		state:               state,
+		queues:              map[string][]InboundEvent{},
+		launchedAgents:      map[string]LaunchedAgent{},
+		pendingModelPickers: map[string]pendingModelPicker{},
 		envelope: Envelope{
 			BridgeID:    cfg.BridgeID,
 			StartedAt:   time.Now().UTC(),
@@ -314,6 +351,7 @@ func (s *BridgeService) Start(ctx context.Context) error {
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent | discordgo.IntentsGuildMessageReactions
 	dg.AddHandler(s.onReady)
 	dg.AddHandler(s.onMessageCreate)
+	dg.AddHandler(s.onInteractionCreate)
 	s.dg = dg
 	if !s.cfg.DryRun {
 		if err := dg.Open(); err != nil {

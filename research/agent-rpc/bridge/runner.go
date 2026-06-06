@@ -107,6 +107,9 @@ func (r *Runner) handleEvent(ctx context.Context, event InboundEvent) error {
 	if event.Kind == "slash_passthrough" {
 		return r.handleSlashPassthrough(ctx, event)
 	}
+	if event.Kind == "set_model" {
+		return r.handleSetModel(ctx, event)
+	}
 	message := formatBridgeMessage(event)
 	result, err := r.harness.Prompt(ctx, message)
 	if err != nil {
@@ -123,6 +126,20 @@ func (r *Runner) handleEvent(ctx context.Context, event InboundEvent) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) handleSetModel(ctx context.Context, event InboundEvent) error {
+	if err := r.harness.SetModel(ctx, event.Content); err != nil {
+		return err
+	}
+	if event.MessageID == "" {
+		return nil
+	}
+	return r.client.Complete(ctx, r.cfg.AgentID, CompleteRequest{
+		MessageID:     event.MessageID,
+		Content:       fmt.Sprintf("[discord-bridge]\nModel changed to: %s", event.Content),
+		FinalReaction: r.cfg.SuccessReaction,
+	})
 }
 
 func (r *Runner) handleSlashPassthrough(ctx context.Context, event InboundEvent) error {
