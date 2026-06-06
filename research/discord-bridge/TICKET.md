@@ -37,6 +37,12 @@ In addition to per-agent automation, the bridge should also provide wholesale fe
 - minimal but durable defaults
 - deterministic bridge-owned behavior across agents and models
 
+## Where to build it
+
+Build the bridge as a self-contained project in `research/discord-bridge/` alongside this `TICKET.md`.
+
+That directory should be the working home for design notes, implementation scaffolding, and any bridge-specific code you add while prototyping. If you split the bridge into its own runnable package or service, keep the bridge source tree there first and wire it into the main Pi repo afterward.
+
 ## Where to look first in the codebase
 
 Start with these files and concepts:
@@ -117,6 +123,19 @@ await bridge.start();
 ```
 
 A good implementation should still make its own judgment about the final API shape. This snippet is just orientation.
+
+### Language suggestion
+
+Consider writing the service in **Go**.
+
+Why Go fits well here:
+- good fit for an always-on daemon/service
+- straightforward concurrency for Discord event loops and persistence
+- easy static binary deployment
+- simple config/state handling for bridge-owned storage
+- good ergonomics for a small, reliable control-plane service
+
+If another language turns out cleaner for repo integration, use judgment — but Go is the default suggestion for the bridge service itself.
 
 ## What to change if the design wants it
 
