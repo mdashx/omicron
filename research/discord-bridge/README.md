@@ -70,6 +70,7 @@ Then open `http://<vpn-host>:19444/` from another machine on the VPN.
 
 Start with the research docs in this directory:
 
+- `SCOPE.md`
 - `SPEC.md`
 - `IMPLEMENTATION-PLAN.md`
 - `TICKET.md`
