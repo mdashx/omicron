@@ -1,0 +1,208 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+type dashboardData struct {
+	Envelope          Envelope           `json:"envelope"`
+	Bindings          map[string]Binding `json:"bindings"`
+	QueueSizes        map[string]int     `json:"queueSizes"`
+	DryRun            bool               `json:"dryRun"`
+	RecentChats       []chatLogRecord    `json:"recentChats"`
+	RecentAttachments []AttachmentRecord `json:"recentAttachments"`
+	AttachmentCount   int                `json:"attachmentCount"`
+	AuditTail         []auditRecord      `json:"auditTail"`
+	ManagedReactions  map[string]string  `json:"managedReactions"`
+	StatusReactions   []string           `json:"statusReactions"`
+	FinalChoices      []string           `json:"finalReactionChoices"`
+	Now               time.Time          `json:"now"`
+}
+
+func (s *BridgeService) dashboardSnapshot() dashboardData {
+	s.mu.Lock()
+	bindings := make(map[string]Binding, len(s.state.Bindings))
+	for k, v := range s.state.Bindings {
+		bindings[k] = v
+	}
+	queueSizes := make(map[string]int, len(s.queues))
+	for k, v := range s.queues {
+		queueSizes[k] = len(v)
+	}
+	reactions := make(map[string]string, len(s.state.ManagedReactions))
+	for k, v := range s.state.ManagedReactions {
+		reactions[k] = v
+	}
+	envelope := s.envelope
+	dryRun := s.cfg.DryRun
+	statusReactions := append([]string(nil), s.cfg.StatusReactions...)
+	finalChoices := append([]string(nil), s.cfg.FinalReactionChoices...)
+	logsRoot := s.cfg.LogsRoot
+	downloadsRoot := s.cfg.DownloadsRoot
+	auditPath := s.cfg.AuditPath
+	s.mu.Unlock()
+
+	recentChats := readRecentChats(logsRoot, 20)
+	recentAttachments, attachmentCount := readRecentAttachments(downloadsRoot, 20)
+	auditTail := readAuditTail(auditPath, 20)
+
+	return dashboardData{
+		Envelope:          envelope,
+		Bindings:          bindings,
+		QueueSizes:        queueSizes,
+		DryRun:            dryRun,
+		RecentChats:       recentChats,
+		RecentAttachments: recentAttachments,
+		AttachmentCount:   attachmentCount,
+		AuditTail:         auditTail,
+		ManagedReactions:  reactions,
+		StatusReactions:   statusReactions,
+		FinalChoices:      finalChoices,
+		Now:               time.Now().UTC(),
+	}
+}
+
+func readRecentChats(root string, limit int) []chatLogRecord {
+	var records []chatLogRecord
+	_ = filepath.Walk(filepath.Join(root, "chats"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		for _, line := range readLastLines(path, 10) {
+			var rec chatLogRecord
+			if err := json.Unmarshal([]byte(line), &rec); err == nil {
+				records = append(records, rec)
+			}
+		}
+		return nil
+	})
+	sort.Slice(records, func(i, j int) bool { return records[i].Timestamp.After(records[j].Timestamp) })
+	if len(records) > limit {
+		return records[:limit]
+	}
+	return records
+}
+
+func readRecentAttachments(root string, limit int) ([]AttachmentRecord, int) {
+	var records []AttachmentRecord
+	count := 0
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		count++
+		records = append(records, AttachmentRecord{
+			Filename:  info.Name(),
+			LocalPath: path,
+			Size:      int(info.Size()),
+		})
+		return nil
+	})
+	sort.Slice(records, func(i, j int) bool { return records[i].LocalPath > records[j].LocalPath })
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, count
+}
+
+func readAuditTail(path string, limit int) []auditRecord {
+	var records []auditRecord
+	for _, line := range readLastLines(path, limit) {
+		var rec auditRecord
+		if err := json.Unmarshal([]byte(line), &rec); err == nil {
+			records = append(records, rec)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Timestamp.After(records[j].Timestamp) })
+	if len(records) > limit {
+		return records[:limit]
+	}
+	return records
+}
+
+func renderDashboardHTML() string {
+	return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discord Bridge Dashboard</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
+    header { padding: 20px 24px; background: #11182d; position: sticky; top: 0; }
+    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .card { background: #121a30; border: 1px solid #24304d; border-radius: 12px; padding: 16px; overflow: auto; }
+    h1,h2,h3 { margin: 0 0 12px 0; }
+    pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #24304d; vertical-align: top; }
+    code { background: #0f172a; padding: 2px 6px; border-radius: 6px; }
+    .muted { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Discord Bridge Dashboard</h1>
+    <div class="muted">Accessible on your VPN by binding the service to a VPN/Tailscale host or <code>0.0.0.0</code>.</div>
+  </header>
+  <main>
+    <section class="card"><h2>Bridge</h2><pre id="bridge"></pre></section>
+    <section class="card"><h2>Bindings</h2><pre id="bindings"></pre></section>
+    <section class="card"><h2>Queues</h2><pre id="queues"></pre></section>
+    <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
+    <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
+    <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
+    <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
+  </main>
+  <script>
+    const pretty = (v) => JSON.stringify(v, null, 2);
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    function renderRows(items, mapFn) {
+      if (!items || !items.length) return '<div class="muted">None yet.</div>';
+      return '<table><tbody>' + items.map(mapFn).join('') + '</tbody></table>';
+    }
+    async function refresh() {
+      const res = await fetch('/api/dashboard');
+      const data = await res.json();
+      document.getElementById('bridge').textContent = pretty({ envelope: data.envelope, dryRun: data.dryRun, now: data.now, statusReactions: data.statusReactions, finalChoices: data.finalReactionChoices });
+      document.getElementById('bindings').textContent = pretty(data.bindings);
+      document.getElementById('queues').textContent = pretty(data.queueSizes);
+      document.getElementById('reactions').textContent = pretty(data.managedReactions);
+      document.getElementById('chats').innerHTML = renderRows(data.recentChats, (item) => '<tr><td><strong>' + esc(item.authorName || item.authorId || 'unknown') + '</strong><div class="muted">' + esc(item.channelId) + ' · ' + esc(item.timestamp) + '</div></td><td>' + esc(item.content || '') + '</td></tr>');
+      document.getElementById('attachments').innerHTML = '<div class="muted">Total files: ' + esc(data.attachmentCount) + '</div>' + renderRows(data.recentAttachments, (item) => '<tr><td><strong>' + esc(item.filename) + '</strong></td><td>' + esc(item.localPath || '') + '</td></tr>');
+      document.getElementById('audit').innerHTML = renderRows(data.auditTail, (item) => '<tr><td><strong>' + esc(item.type) + '</strong><div class="muted">' + esc(item.timestamp) + '</div></td><td><pre>' + esc(JSON.stringify(item.payload, null, 2)) + '</pre></td></tr>');
+    }
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>`
+}
+
+func readLastLines(path string, limit int) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var lines []string
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) > limit {
+			lines = lines[1:]
+		}
+	}
+	return lines
+}

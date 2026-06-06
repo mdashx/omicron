@@ -30,26 +30,28 @@ type completeRequest struct {
 }
 
 func (s *BridgeService) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/", s.handleDashboard)
+	mux.HandleFunc("/api/dashboard", s.handleDashboardData)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/join", s.handleJoin)
 	mux.HandleFunc("/agents/", s.handleAgents)
 }
 
 func (s *BridgeService) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"envelope": s.envelope,
-		"bindings": s.state.Bindings,
-		"queueSizes": func() map[string]int {
-			m := map[string]int{}
-			for agentID, q := range s.queues {
-				m[agentID] = len(q)
-			}
-			return m
-		}(),
-		"dryRun": s.cfg.DryRun,
-	})
+	writeJSON(w, http.StatusOK, s.dashboardSnapshot())
+}
+
+func (s *BridgeService) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(renderDashboardHTML()))
+}
+
+func (s *BridgeService) handleDashboardData(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.dashboardSnapshot())
 }
 
 func (s *BridgeService) handleJoin(w http.ResponseWriter, r *http.Request) {
