@@ -50,6 +50,7 @@ type Config struct {
 	FinalReactionChoices     []string `json:"finalReactionChoices"`
 	DefaultGuildID           string   `json:"defaultGuildId,omitempty"`
 	AssignableChannelIDs     []string `json:"assignableChannelIds,omitempty"`
+	AdminUserIDs             []string `json:"adminUserIds,omitempty"`
 	AutoStartEnabledChannels bool     `json:"autoStartEnabledChannels,omitempty"`
 	AutoStartAgentPrefix     string   `json:"autoStartAgentPrefix,omitempty"`
 	OpenClawConfigPath       string   `json:"openClawConfigPath,omitempty"`
@@ -74,6 +75,7 @@ func LoadConfig() (Config, error) {
 		FinalReactionChoices:     []string{"✅", "👍", "👀", "🧠", "❤️"},
 		DefaultGuildID:           strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_DEFAULT_GUILD_ID")),
 		AssignableChannelIDs:     splitCSV(os.Getenv("DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS")),
+		AdminUserIDs:             splitCSV(os.Getenv("DISCORD_BRIDGE_ADMIN_USER_IDS")),
 		AutoStartEnabledChannels: envOrBool("DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS", false),
 		AutoStartAgentPrefix:     envOr("DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX", "room"),
 		OpenClawConfigPath:       expandPath(envOr("DISCORD_BRIDGE_OPENCLAW_CONFIG", "~/.openclaw/openclaw.json")),
@@ -131,6 +133,7 @@ func (c *Config) applyAutoAssignmentDefaults() {
 		Enabled bool `json:"enabled"`
 	}
 	type guildEntry struct {
+		Users    []string                `json:"users"`
 		Channels map[string]channelEntry `json:"channels"`
 	}
 	type discordCfg struct {
@@ -159,6 +162,21 @@ func (c *Config) applyAutoAssignmentDefaults() {
 		for channelID, entry := range oc.Channels.Discord.Guilds[c.DefaultGuildID].Channels {
 			if entry.Enabled {
 				c.AssignableChannelIDs = append(c.AssignableChannelIDs, channelID)
+			}
+		}
+	}
+	if len(c.AdminUserIDs) == 0 {
+		seen := map[string]bool{}
+		for guildID, guild := range oc.Channels.Discord.Guilds {
+			if c.DefaultGuildID != "" && guildID != c.DefaultGuildID {
+				continue
+			}
+			for _, userID := range guild.Users {
+				userID = strings.TrimSpace(userID)
+				if userID != "" && !seen[userID] {
+					seen[userID] = true
+					c.AdminUserIDs = append(c.AdminUserIDs, userID)
+				}
 			}
 		}
 	}
@@ -348,6 +366,11 @@ func (s *BridgeService) onMessageCreate(_ *discordgo.Session, m *discordgo.Messa
 
 	attachments := s.persistAttachments(m.Message)
 	_ = s.appendChatLog(m.Message, attachments, hasBinding)
+
+	if isSlashCommand(m.Content) {
+		s.handleSlashCommand(m, hasBinding, binding)
+		return
+	}
 
 	if !hasBinding {
 		return
