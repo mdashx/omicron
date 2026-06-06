@@ -51,7 +51,21 @@ func (s *BridgeService) ensureManagedAgentsForEnabledChannels() ([]string, error
 			continue
 		}
 		if agentID, ok := managedByChannel[channelID]; ok {
+			agent := s.upsertManagedAgentLocked(ManagedAgent{
+				AgentID:            agentID,
+				CredsRef:           "local-session",
+				DesiredState:       "running",
+				RequestedGuildID:   s.cfg.DefaultGuildID,
+				RequestedChannelID: channelID,
+				AutoLaunch:         true,
+			})
+			// Auto-generated room agents should follow the bridge's current default launch spec.
+			agent.Command = ""
+			agent.Args = nil
+			agent.WorkingDir = ""
+			s.state.ManagedAgents[agentID] = agent
 			createdOrExisting = append(createdOrExisting, agentID)
+			changed = true
 			continue
 		}
 		agentID := fmt.Sprintf("%s-%s", strings.TrimSpace(s.cfg.AutoStartAgentPrefix), channelID)
