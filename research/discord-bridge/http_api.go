@@ -64,22 +64,39 @@ func (s *BridgeService) handleJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.AgentID == "" || req.CredsRef == "" || req.RequestedChannelID == "" {
-		http.Error(w, "agentId, credsRef, requestedChannelId are required", http.StatusBadRequest)
+	if req.AgentID == "" || req.CredsRef == "" {
+		http.Error(w, "agentId and credsRef are required", http.StatusBadRequest)
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	requestedGuildID := req.RequestedGuildID
+	requestedChannelID := req.RequestedChannelID
+	if existing, ok := s.state.Bindings[req.AgentID]; ok && existing.Active {
+		if requestedGuildID == "" {
+			requestedGuildID = existing.GuildID
+		}
+		if requestedChannelID == "" {
+			requestedChannelID = existing.ChannelID
+		}
+	}
+	if requestedChannelID == "" {
+		requestedGuildID, requestedChannelID = s.assignChannelLocked(requestedGuildID, req.AgentID)
+		if requestedChannelID == "" {
+			http.Error(w, "no assignable channel available", http.StatusConflict)
+			return
+		}
+	}
 	for agentID, binding := range s.state.Bindings {
-		if agentID != req.AgentID && binding.Active && binding.ChannelID == req.RequestedChannelID {
+		if agentID != req.AgentID && binding.Active && binding.ChannelID == requestedChannelID {
 			http.Error(w, "channel already bound to another active agent", http.StatusConflict)
 			return
 		}
 	}
 	binding := Binding{
 		AgentID:   req.AgentID,
-		GuildID:   req.RequestedGuildID,
-		ChannelID: req.RequestedChannelID,
+		GuildID:   requestedGuildID,
+		ChannelID: requestedChannelID,
 		JoinedAt:  time.Now().UTC(),
 		Active:    true,
 	}
@@ -88,7 +105,7 @@ func (s *BridgeService) handleJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = s.appendAudit("agent.join", map[string]any{"agentId": req.AgentID, "channelId": req.RequestedChannelID, "guildId": req.RequestedGuildID, "scope": req.Scope})
+	_ = s.appendAudit("agent.join", map[string]any{"agentId": req.AgentID, "channelId": requestedChannelID, "guildId": requestedGuildID, "scope": req.Scope})
 	writeJSON(w, http.StatusOK, binding)
 }
 
@@ -186,6 +203,28 @@ func (s *BridgeService) activeBinding(agentID string) (Binding, error) {
 		return Binding{}, errors.New("active binding not found")
 	}
 	return binding, nil
+}
+
+func (s *BridgeService) assignChannelLocked(requestedGuildID, agentID string) (string, string) {
+	guildID := requestedGuildID
+	if guildID == "" {
+		guildID = s.cfg.DefaultGuildID
+	}
+	used := map[string]bool{}
+	for existingAgentID, binding := range s.state.Bindings {
+		if existingAgentID == agentID {
+			continue
+		}
+		if binding.Active {
+			used[binding.ChannelID] = true
+		}
+	}
+	for _, channelID := range s.cfg.AssignableChannelIDs {
+		if !used[channelID] {
+			return guildID, channelID
+		}
+	}
+	return guildID, ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

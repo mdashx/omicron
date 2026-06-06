@@ -22,8 +22,12 @@ func NewBridgeClient(baseURL string) *BridgeClient {
 	}
 }
 
-func (c *BridgeClient) Join(req JoinRequest) error {
-	return c.post("/join", req, nil)
+func (c *BridgeClient) Join(req JoinRequest) (Binding, error) {
+	var binding Binding
+	if err := c.post("/join", req, &binding); err != nil {
+		return Binding{}, err
+	}
+	return binding, nil
 }
 
 func (c *BridgeClient) PollEvents(agentID string) ([]InboundEvent, error) {

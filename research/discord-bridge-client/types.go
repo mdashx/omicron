@@ -6,8 +6,16 @@ type JoinRequest struct {
 	AgentID            string   `json:"agentId"`
 	CredsRef           string   `json:"credsRef"`
 	RequestedGuildID   string   `json:"requestedGuildId,omitempty"`
-	RequestedChannelID string   `json:"requestedChannelId"`
+	RequestedChannelID string   `json:"requestedChannelId,omitempty"`
 	Scope              []string `json:"scope,omitempty"`
+}
+
+type Binding struct {
+	AgentID   string    `json:"agentId"`
+	GuildID   string    `json:"guildId"`
+	ChannelID string    `json:"channelId"`
+	JoinedAt  time.Time `json:"joinedAt"`
+	Active    bool      `json:"active"`
 }
 
 type InboundEvent struct {

@@ -28,14 +28,21 @@ func NewHarness(cfg Config) (*Harness, error) {
 }
 
 func (h *Harness) Run(ctx context.Context) error {
-	if err := h.client.Join(JoinRequest{
+	binding, err := h.client.Join(JoinRequest{
 		AgentID:            h.cfg.AgentID,
 		CredsRef:           h.cfg.CredsRef,
 		RequestedGuildID:   h.cfg.GuildID,
 		RequestedChannelID: h.cfg.ChannelID,
 		Scope:              []string{"read.logs", "read.downloads", "channel.listen", "channel.reply"},
-	}); err != nil {
+	})
+	if err != nil {
 		return err
+	}
+	if h.cfg.GuildID == "" {
+		h.cfg.GuildID = binding.GuildID
+	}
+	if h.cfg.ChannelID == "" {
+		h.cfg.ChannelID = binding.ChannelID
 	}
 	h.mu.Lock()
 	h.state.LastJoinAt = time.Now().UTC()

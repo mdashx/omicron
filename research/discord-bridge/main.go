@@ -48,6 +48,9 @@ type Config struct {
 	AckReaction          string   `json:"ackReaction"`
 	StatusReactions      []string `json:"statusReactions"`
 	FinalReactionChoices []string `json:"finalReactionChoices"`
+	DefaultGuildID       string   `json:"defaultGuildId,omitempty"`
+	AssignableChannelIDs []string `json:"assignableChannelIds,omitempty"`
+	OpenClawConfigPath   string   `json:"openClawConfigPath,omitempty"`
 	DryRun               bool     `json:"dryRun"`
 }
 
@@ -67,6 +70,9 @@ func LoadConfig() (Config, error) {
 		AckReaction:          envOr("DISCORD_BRIDGE_ACK_REACTION", "✅"),
 		StatusReactions:      []string{"⏳", "🤖", "💭", "✅", "⚠️"},
 		FinalReactionChoices: []string{"✅", "👍", "👀", "🧠", "❤️"},
+		DefaultGuildID:       strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_DEFAULT_GUILD_ID")),
+		AssignableChannelIDs: splitCSV(os.Getenv("DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS")),
+		OpenClawConfigPath:   expandPath(envOr("DISCORD_BRIDGE_OPENCLAW_CONFIG", "~/.openclaw/openclaw.json")),
 		DryRun:               envOrBool("DISCORD_BRIDGE_DRY_RUN", false),
 	}
 	if path := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_CONFIG")); path != "" {
@@ -83,6 +89,8 @@ func LoadConfig() (Config, error) {
 	cfg.DownloadsRoot = expandPath(cfg.DownloadsRoot)
 	cfg.AuditPath = expandPath(cfg.AuditPath)
 	cfg.StatePath = expandPath(cfg.StatePath)
+	cfg.OpenClawConfigPath = expandPath(cfg.OpenClawConfigPath)
+	cfg.applyAutoAssignmentDefaults()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -106,6 +114,47 @@ func (c Config) Validate() error {
 		return errors.New("reaction config must not be empty")
 	}
 	return nil
+}
+
+func (c *Config) applyAutoAssignmentDefaults() {
+	if c.DefaultGuildID != "" && len(c.AssignableChannelIDs) > 0 {
+		return
+	}
+	type channelEntry struct {
+		Enabled bool `json:"enabled"`
+	}
+	type guildEntry struct {
+		Channels map[string]channelEntry `json:"channels"`
+	}
+	type discordCfg struct {
+		Guilds map[string]guildEntry `json:"guilds"`
+	}
+	type openClawCfg struct {
+		Channels struct {
+			Discord discordCfg `json:"discord"`
+		} `json:"channels"`
+	}
+	raw, err := os.ReadFile(c.OpenClawConfigPath)
+	if err != nil {
+		return
+	}
+	var oc openClawCfg
+	if json.Unmarshal(raw, &oc) != nil {
+		return
+	}
+	if c.DefaultGuildID == "" {
+		for guildID := range oc.Channels.Discord.Guilds {
+			c.DefaultGuildID = guildID
+			break
+		}
+	}
+	if len(c.AssignableChannelIDs) == 0 && c.DefaultGuildID != "" {
+		for channelID, entry := range oc.Channels.Discord.Guilds[c.DefaultGuildID].Channels {
+			if entry.Enabled {
+				c.AssignableChannelIDs = append(c.AssignableChannelIDs, channelID)
+			}
+		}
+	}
 }
 
 type Envelope struct {
@@ -361,4 +410,20 @@ func envOrBool(key string, fallback bool) bool {
 		return value == "1" || value == "true" || value == "yes" || value == "on"
 	}
 	return fallback
+}
+
+func splitCSV(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }

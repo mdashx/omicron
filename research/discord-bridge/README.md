@@ -7,6 +7,7 @@ Prototype Go service for the Discord bridge described in this directory.
 - connects to Discord via bot token
 - keeps local chat and attachment logs
 - lets one agent bind to one Discord channel
+- can auto-assign a channel when the agent joins without one
 - queues inbound events for the bound agent
 - adds bridge-owned reactions for ack / progress / final state
 - exposes a small HTTP dashboard plus local API for join, poll, status updates, and completion
@@ -32,7 +33,12 @@ export DISCORD_BRIDGE_HOST=127.0.0.1
 export DISCORD_BRIDGE_STORAGE_ROOT=~/.pi/discord-bridge
 export DISCORD_BRIDGE_ID=discord-bridge-main
 export DISCORD_BRIDGE_DRY_RUN=false
+# optional explicit auto-assignment list
+export DISCORD_BRIDGE_DEFAULT_GUILD_ID=1478102509330497721
+export DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS=1504560627325079642,1488999734944202802
 ```
+
+If the explicit auto-assignment env vars are omitted, the bridge will try to infer assignable Discord channels from `~/.openclaw/openclaw.json`.
 
 ## Dashboard
 

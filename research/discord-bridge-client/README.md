@@ -19,12 +19,19 @@ cd research/discord-bridge-client
 go run .
 ```
 
-Required env:
+Default config file:
+
+```bash
+~/.pi/discord-bridge-client/config.json
+```
+
+If that file exists, `discoagent` loads it automatically.
+
+Minimal env without a config file:
 
 ```bash
 export DISCORD_BRIDGE_AGENT_ID=main
 export DISCORD_BRIDGE_CREDS_REF=local-session
-export DISCORD_BRIDGE_CHANNEL_ID=1504560627325079642
 ```
 
 Useful optional env:
@@ -32,6 +39,8 @@ Useful optional env:
 ```bash
 export DISCORD_BRIDGE_URL=http://127.0.0.1:19444
 export DISCORD_BRIDGE_GUILD_ID=1478102509330497721
+# optional: omit channel id and let the bridge auto-assign one
+export DISCORD_BRIDGE_CHANNEL_ID=1504560627325079642
 export DISCORD_BRIDGE_COMMAND=pi
 export DISCORD_BRIDGE_COMMAND_ARGS='-c'
 export DISCORD_BRIDGE_CWD=/home/easter/omicron

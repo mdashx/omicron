@@ -13,7 +13,7 @@ func TestBridgeClientJoinAndPoll(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
-		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(Binding{AgentID: "main", ChannelID: "123", Active: true})
 	})
 	mux.HandleFunc("/agents/main/events", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(EventPollResponse{Events: []InboundEvent{{EventID: "evt_1", MessageID: "msg_1"}}})
@@ -21,8 +21,12 @@ func TestBridgeClientJoinAndPoll(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	client := NewBridgeClient(server.URL)
-	if err := client.Join(JoinRequest{AgentID: "main", CredsRef: "local", RequestedChannelID: "123"}); err != nil {
+	binding, err := client.Join(JoinRequest{AgentID: "main", CredsRef: "local", RequestedChannelID: "123"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if binding.ChannelID != "123" {
+		t.Fatalf("unexpected binding: %+v", binding)
 	}
 	events, err := client.PollEvents("main")
 	if err != nil {
