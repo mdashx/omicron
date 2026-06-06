@@ -36,9 +36,14 @@ export DISCORD_BRIDGE_DRY_RUN=false
 # optional explicit auto-assignment list
 export DISCORD_BRIDGE_DEFAULT_GUILD_ID=1478102509330497721
 export DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS=1504560627325079642,1488999734944202802
+# optional: auto-create and auto-start one Pi bridge client per enabled room
+export DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true
+export DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX=room
 ```
 
 If the explicit auto-assignment env vars are omitted, the bridge will try to infer assignable Discord channels from `~/.openclaw/openclaw.json`.
+
+If `DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS=true`, the bridge will synthesize one managed agent per enabled assignable Discord channel and auto-launch a Pi-backed bridge client for each room. The generated agent ids default to `<prefix>-<channelId>` where the prefix comes from `DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX`.
 
 ## Dashboard
 

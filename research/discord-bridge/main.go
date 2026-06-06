@@ -35,45 +35,49 @@ func main() {
 }
 
 type Config struct {
-	Enabled              bool     `json:"enabled"`
-	BotToken             string   `json:"botToken"`
-	BridgeID             string   `json:"bridgeId"`
-	Host                 string   `json:"host"`
-	Port                 int      `json:"port"`
-	StorageRoot          string   `json:"storageRoot"`
-	LogsRoot             string   `json:"logsRoot"`
-	DownloadsRoot        string   `json:"downloadsRoot"`
-	AuditPath            string   `json:"auditPath"`
-	StatePath            string   `json:"statePath"`
-	AckReaction          string   `json:"ackReaction"`
-	StatusReactions      []string `json:"statusReactions"`
-	FinalReactionChoices []string `json:"finalReactionChoices"`
-	DefaultGuildID       string   `json:"defaultGuildId,omitempty"`
-	AssignableChannelIDs []string `json:"assignableChannelIds,omitempty"`
-	OpenClawConfigPath   string   `json:"openClawConfigPath,omitempty"`
-	DryRun               bool     `json:"dryRun"`
+	Enabled                  bool     `json:"enabled"`
+	BotToken                 string   `json:"botToken"`
+	BridgeID                 string   `json:"bridgeId"`
+	Host                     string   `json:"host"`
+	Port                     int      `json:"port"`
+	StorageRoot              string   `json:"storageRoot"`
+	LogsRoot                 string   `json:"logsRoot"`
+	DownloadsRoot            string   `json:"downloadsRoot"`
+	AuditPath                string   `json:"auditPath"`
+	StatePath                string   `json:"statePath"`
+	AckReaction              string   `json:"ackReaction"`
+	StatusReactions          []string `json:"statusReactions"`
+	FinalReactionChoices     []string `json:"finalReactionChoices"`
+	DefaultGuildID           string   `json:"defaultGuildId,omitempty"`
+	AssignableChannelIDs     []string `json:"assignableChannelIds,omitempty"`
+	AutoStartEnabledChannels bool     `json:"autoStartEnabledChannels,omitempty"`
+	AutoStartAgentPrefix     string   `json:"autoStartAgentPrefix,omitempty"`
+	OpenClawConfigPath       string   `json:"openClawConfigPath,omitempty"`
+	DryRun                   bool     `json:"dryRun"`
 }
 
 func LoadConfig() (Config, error) {
 	root := expandPath(envOr("DISCORD_BRIDGE_STORAGE_ROOT", "~/.pi/discord-bridge"))
 	cfg := Config{
-		Enabled:              true,
-		BotToken:             strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
-		BridgeID:             envOr("DISCORD_BRIDGE_ID", "discord-bridge-main"),
-		Host:                 envOr("DISCORD_BRIDGE_HOST", "127.0.0.1"),
-		Port:                 envOrInt("DISCORD_BRIDGE_PORT", 19444),
-		StorageRoot:          root,
-		LogsRoot:             filepath.Join(root, "logs"),
-		DownloadsRoot:        filepath.Join(root, "downloads"),
-		AuditPath:            filepath.Join(root, "audit.jsonl"),
-		StatePath:            filepath.Join(root, "state.json"),
-		AckReaction:          envOr("DISCORD_BRIDGE_ACK_REACTION", "✅"),
-		StatusReactions:      []string{"⏳", "🤖", "💭", "✅", "⚠️"},
-		FinalReactionChoices: []string{"✅", "👍", "👀", "🧠", "❤️"},
-		DefaultGuildID:       strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_DEFAULT_GUILD_ID")),
-		AssignableChannelIDs: splitCSV(os.Getenv("DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS")),
-		OpenClawConfigPath:   expandPath(envOr("DISCORD_BRIDGE_OPENCLAW_CONFIG", "~/.openclaw/openclaw.json")),
-		DryRun:               envOrBool("DISCORD_BRIDGE_DRY_RUN", false),
+		Enabled:                  true,
+		BotToken:                 strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
+		BridgeID:                 envOr("DISCORD_BRIDGE_ID", "discord-bridge-main"),
+		Host:                     envOr("DISCORD_BRIDGE_HOST", "127.0.0.1"),
+		Port:                     envOrInt("DISCORD_BRIDGE_PORT", 19444),
+		StorageRoot:              root,
+		LogsRoot:                 filepath.Join(root, "logs"),
+		DownloadsRoot:            filepath.Join(root, "downloads"),
+		AuditPath:                filepath.Join(root, "audit.jsonl"),
+		StatePath:                filepath.Join(root, "state.json"),
+		AckReaction:              envOr("DISCORD_BRIDGE_ACK_REACTION", "✅"),
+		StatusReactions:          []string{"⏳", "🤖", "💭", "✅", "⚠️"},
+		FinalReactionChoices:     []string{"✅", "👍", "👀", "🧠", "❤️"},
+		DefaultGuildID:           strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_DEFAULT_GUILD_ID")),
+		AssignableChannelIDs:     splitCSV(os.Getenv("DISCORD_BRIDGE_ASSIGNABLE_CHANNEL_IDS")),
+		AutoStartEnabledChannels: envOrBool("DISCORD_BRIDGE_AUTOSTART_ENABLED_CHANNELS", false),
+		AutoStartAgentPrefix:     envOr("DISCORD_BRIDGE_AUTOSTART_AGENT_PREFIX", "room"),
+		OpenClawConfigPath:       expandPath(envOr("DISCORD_BRIDGE_OPENCLAW_CONFIG", "~/.openclaw/openclaw.json")),
+		DryRun:                   envOrBool("DISCORD_BRIDGE_DRY_RUN", false),
 	}
 	if path := strings.TrimSpace(os.Getenv("DISCORD_BRIDGE_CONFIG")); path != "" {
 		raw, err := os.ReadFile(expandPath(path))
@@ -112,6 +116,9 @@ func (c Config) Validate() error {
 	}
 	if c.AckReaction == "" || len(c.StatusReactions) == 0 || len(c.FinalReactionChoices) == 0 {
 		return errors.New("reaction config must not be empty")
+	}
+	if c.AutoStartEnabledChannels && strings.TrimSpace(c.AutoStartAgentPrefix) == "" {
+		return errors.New("autoStartAgentPrefix must not be empty when autoStartEnabledChannels is enabled")
 	}
 	return nil
 }
@@ -306,6 +313,7 @@ func (s *BridgeService) Start(ctx context.Context) error {
 		}
 	}()
 	log.Printf("discord bridge listening on http://%s:%d dry_run=%v", s.cfg.Host, s.cfg.Port, s.cfg.DryRun)
+	s.startAutoManagedAgents()
 	if err := s.appendAudit("bridge.start", map[string]any{"bridgeId": s.cfg.BridgeID, "startedAt": s.started}); err != nil {
 		return err
 	}
