@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+type channelOption struct {
+	ID      string `json:"id"`
+	GuildID string `json:"guildId,omitempty"`
+	Name    string `json:"name"`
+	Label   string `json:"label"`
+}
+
 type dashboardData struct {
 	Envelope             Envelope                 `json:"envelope"`
 	Bindings             map[string]Binding       `json:"bindings"`
@@ -23,6 +30,7 @@ type dashboardData struct {
 	StatusReactions      []string                 `json:"statusReactions"`
 	FinalChoices         []string                 `json:"finalReactionChoices"`
 	AssignableChannelIDs []string                 `json:"assignableChannelIds"`
+	AssignableChannels   []channelOption          `json:"assignableChannels"`
 	DefaultGuildID       string                   `json:"defaultGuildId"`
 	LaunchedAgents       map[string]LaunchedAgent `json:"launchedAgents"`
 	Now                  time.Time                `json:"now"`
@@ -57,6 +65,7 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 	auditPath := s.cfg.AuditPath
 	s.mu.Unlock()
 
+	assignableChannels := s.resolveAssignableChannels(defaultGuildID, assignableChannelIDs)
 	recentChats := readRecentChats(logsRoot, 20)
 	recentAttachments, attachmentCount := readRecentAttachments(downloadsRoot, 20)
 	auditTail := readAuditTail(auditPath, 20)
@@ -74,10 +83,33 @@ func (s *BridgeService) dashboardSnapshot() dashboardData {
 		StatusReactions:      statusReactions,
 		FinalChoices:         finalChoices,
 		AssignableChannelIDs: assignableChannelIDs,
+		AssignableChannels:   assignableChannels,
 		DefaultGuildID:       defaultGuildID,
 		LaunchedAgents:       launchedAgents,
 		Now:                  time.Now().UTC(),
 	}
+}
+
+func (s *BridgeService) resolveAssignableChannels(guildID string, ids []string) []channelOption {
+	options := make([]channelOption, 0, len(ids))
+	for _, id := range ids {
+		name := id
+		label := id
+		if s.dg != nil {
+			if ch, err := s.dg.State.Channel(id); err == nil && ch != nil {
+				if ch.Name != "" {
+					name = ch.Name
+				}
+			} else if ch, err := s.dg.Channel(id); err == nil && ch != nil && ch.Name != "" {
+				name = ch.Name
+			}
+		}
+		if name != id {
+			label = "#" + name + " (" + id + ")"
+		}
+		options = append(options, channelOption{ID: id, GuildID: guildID, Name: name, Label: label})
+	}
+	return options
 }
 
 func readRecentChats(root string, limit int) []chatLogRecord {
@@ -170,7 +202,7 @@ func renderDashboardHTML() string {
       <form id="launch-form">
         <div><label>Agent ID<br><input name="agentId" value="agent-1" style="width:100%"></label></div>
         <div><label>Guild ID (optional)<br><input name="guildId" style="width:100%"></label></div>
-        <div><label>Channel ID (optional)<br><input name="channelId" style="width:100%"></label></div>
+        <div><label>Channel<br><select name="channelId" id="channel-select" style="width:100%"><option value="">Auto-assign</option></select></label></div>
         <div><label>Command (optional)<br><input name="command" value="discoagent" style="width:100%"></label></div>
         <div style="margin-top:10px"><button type="submit">Launch</button></div>
       </form>
@@ -195,6 +227,14 @@ func renderDashboardHTML() string {
       const res = await fetch('/api/dashboard');
       const data = await res.json();
       document.getElementById('bridge').textContent = pretty({ envelope: data.envelope, dryRun: data.dryRun, now: data.now, defaultGuildId: data.defaultGuildId, assignableChannelIds: data.assignableChannelIds, statusReactions: data.statusReactions, finalChoices: data.finalReactionChoices });
+      const guildInput = document.querySelector('input[name="guildId"]');
+      if (guildInput && !guildInput.value && data.defaultGuildId) guildInput.value = data.defaultGuildId;
+      const select = document.getElementById('channel-select');
+      if (select) {
+        const current = select.value;
+        select.innerHTML = '<option value="">Auto-assign</option>' + (data.assignableChannels || []).map((ch) => '<option value="' + esc(ch.id) + '">' + esc(ch.label || ch.id) + '</option>').join('');
+        if (current) select.value = current;
+      }
       document.getElementById('bindings').textContent = pretty(data.bindings);
       document.getElementById('queues').textContent = pretty(data.queueSizes);
       document.getElementById('reactions').textContent = pretty(data.managedReactions);
