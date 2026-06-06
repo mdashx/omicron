@@ -1,8 +1,8 @@
-# Agent RPC Implementation Plan
+# Agent RPC Scope
 
 ## Scope
 
-This plan intentionally narrows the project to a single upstream agent interface and a single downstream output target.
+This document intentionally narrows the project to a single upstream agent interface and a single downstream output target.
 
 In scope:
 
@@ -246,62 +246,19 @@ Harness-owned logs should include:
 - raw RPC lines on parse failure
 - summarized event timeline per handled request
 
-## Implementation phases
+## Intended first slice
 
-## Phase 1
+The intended first slice inside this scope is:
 
-Build the minimum Pi RPC process wrapper.
+- one Pi RPC process
+- one active Discord-bound agent
+- one prompt in, one final reply out
+- session continuity preserved
+- reactions updated correctly
 
-Deliverables:
+Everything else in this document defines the allowed target surface and boundaries for that slice.
 
-- launch `pi --mode rpc`
-- send `prompt`
-- read events and responses
-- capture final assistant text
-- handle shutdown cleanly
-
-## Phase 2
-
-Integrate with the Discord bridge request flow.
-
-Deliverables:
-
-- map inbound bridge events to Pi RPC `prompt`
-- send final assistant reply back through the bridge
-- update bridge reactions for started/completed/error states
-
-## Phase 3
-
-Add session tracking and continuity.
-
-Deliverables:
-
-- persist or cache `sessionId` and `sessionFile` per active agent
-- reuse the same Pi process/session across multiple Discord interactions
-- support state inspection via `get_state`
-
-## Phase 4
-
-Add concurrency-safe busy behavior.
-
-Deliverables:
-
-- detect `isStreaming`
-- route new inbound Discord work to `steer`
-- handle queue updates correctly
-
-## Phase 5
-
-Add observability and debugging support.
-
-Deliverables:
-
-- event timeline logs
-- tool lifecycle capture
-- thinking capture
-- better failure diagnostics
-
-## Non-goals for this plan
+## Non-goals for this scope
 
 These are explicitly deferred:
 
@@ -326,12 +283,12 @@ The initial implementation is successful when all of the following are true:
 
 ## Recommendation
 
-Start with the narrowest possible vertical slice:
+Treat this as a boundary document, not a sequencing document.
 
-- one Pi RPC process
-- one active Discord-bound agent
-- one prompt in, one final reply out
-- session continuity preserved
-- reactions updated correctly
+The key constraint is:
 
-That will validate the core architecture before adding queueing, richer status, or any fallback paths.
+- Pi RPC is the only upstream
+- the Discord bridge is the only downstream
+- logs and PTY are fallback/debugging aids, not the primary architecture
+
+Within those boundaries, implementation can proceed incrementally.
