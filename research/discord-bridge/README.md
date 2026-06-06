@@ -10,7 +10,7 @@ Prototype Go service for the Discord bridge described in this directory.
 - can auto-assign a channel when the agent joins without one
 - queues inbound events for the bound agent
 - adds bridge-owned reactions for ack / progress / final state
-- exposes a small HTTP dashboard plus local API for join, poll, status updates, completion, and launching new `discoagent` processes
+- exposes a small HTTP dashboard plus local API for join, poll, status updates, completion, and launching new `agent-rpc --bridge` processes
 
 ## Run
 
@@ -42,7 +42,7 @@ If the explicit auto-assignment env vars are omitted, the bridge will try to inf
 
 ## Dashboard
 
-The dashboard includes a simple **Launch Agent** control that can start a new `discoagent` process and bind it to a Discord channel. It now shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a **PTY Log Preview** panel that tails launched harness logs so you can inspect agent-side issues directly from the UI.
+The dashboard includes a simple **Launch Agent** control that can start a new `agent-rpc --bridge` process and bind it to a Discord channel. By default it launches `go run ./research/agent-rpc/cmd/agent-rpc --bridge` from the repo root when available, and falls back to `agent-rpc --bridge` otherwise. It shows a dropdown of assignable channels and includes channel names when available. Leave channel blank to let the bridge auto-assign one from its configured assignable channels. The dashboard also includes a harness log preview panel so you can inspect agent-side issues directly from the UI.
 
 
 Open:

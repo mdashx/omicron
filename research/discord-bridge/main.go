@@ -206,14 +206,16 @@ type InboundEvent struct {
 }
 
 type LaunchedAgent struct {
-	AgentID   string    `json:"agentId"`
-	GuildID   string    `json:"guildId,omitempty"`
-	ChannelID string    `json:"channelId,omitempty"`
-	Command   string    `json:"command"`
-	PID       int       `json:"pid"`
-	StartedAt time.Time `json:"startedAt"`
-	LogPath   string    `json:"logPath"`
-	State     string    `json:"state"`
+	AgentID    string    `json:"agentId"`
+	GuildID    string    `json:"guildId,omitempty"`
+	ChannelID  string    `json:"channelId,omitempty"`
+	Command    string    `json:"command"`
+	Args       []string  `json:"args,omitempty"`
+	WorkingDir string    `json:"workingDir,omitempty"`
+	PID        int       `json:"pid"`
+	StartedAt  time.Time `json:"startedAt"`
+	LogPath    string    `json:"logPath"`
+	State      string    `json:"state"`
 }
 
 type BridgeService struct {

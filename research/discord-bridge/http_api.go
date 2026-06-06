@@ -30,10 +30,11 @@ type completeRequest struct {
 }
 
 type launchAgentRequest struct {
-	AgentID   string `json:"agentId"`
-	GuildID   string `json:"guildId"`
-	ChannelID string `json:"channelId"`
-	Command   string `json:"command"`
+	AgentID   string   `json:"agentId"`
+	GuildID   string   `json:"guildId"`
+	ChannelID string   `json:"channelId"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
 }
 
 type stopAgentRequest struct {

@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+type launchSpec struct {
+	Command    string
+	Args       []string
+	WorkingDir string
+}
+
 func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, error) {
 	s.mu.Lock()
 	if existing, ok := s.launchedAgents[req.AgentID]; ok && existing.State == "running" {
@@ -36,10 +42,12 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 	}
 	s.mu.Unlock()
 
-	command := strings.TrimSpace(req.Command)
-	if command == "" {
-		command = "discoagent"
+	repoRoot, _ := findOmicronRoot()
+	spec, err := resolveLaunchSpec(req, repoRoot)
+	if err != nil {
+		return LaunchedAgent{}, err
 	}
+
 	agentDir := filepath.Join(s.cfg.StorageRoot, "launched-agents", req.AgentID)
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		return LaunchedAgent{}, err
@@ -49,9 +57,12 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 	if err != nil {
 		return LaunchedAgent{}, err
 	}
-	cmd := exec.Command(command)
+	cmd := exec.Command(spec.Command, spec.Args...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	if spec.WorkingDir != "" {
+		cmd.Dir = spec.WorkingDir
+	}
 	piSessionDir := filepath.Join(agentDir, "pi-sessions")
 	clientStateRoot := filepath.Join(agentDir, "client-state")
 	cmd.Env = append(os.Environ(),
@@ -73,14 +84,16 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 	}
 	_ = logFile.Close()
 	launched := LaunchedAgent{
-		AgentID:   req.AgentID,
-		GuildID:   requestedGuildID,
-		ChannelID: requestedChannelID,
-		Command:   command,
-		PID:       cmd.Process.Pid,
-		StartedAt: time.Now().UTC(),
-		LogPath:   logPath,
-		State:     "running",
+		AgentID:    req.AgentID,
+		GuildID:    requestedGuildID,
+		ChannelID:  requestedChannelID,
+		Command:    spec.Command,
+		Args:       append([]string(nil), spec.Args...),
+		WorkingDir: spec.WorkingDir,
+		PID:        cmd.Process.Pid,
+		StartedAt:  time.Now().UTC(),
+		LogPath:    logPath,
+		State:      "running",
 	}
 	s.mu.Lock()
 	s.launchedAgents[req.AgentID] = launched
@@ -102,6 +115,64 @@ func (s *BridgeService) launchAgent(req launchAgentRequest) (LaunchedAgent, erro
 		_ = s.appendAudit("agent.launch.exit", map[string]any{"agentId": agentID, "state": launched.State})
 	}(req.AgentID, cmd.Process)
 	return launched, nil
+}
+
+func resolveLaunchSpec(req launchAgentRequest, repoRoot string) (launchSpec, error) {
+	command := strings.TrimSpace(req.Command)
+	args := compactArgs(req.Args)
+	if command == "" {
+		if repoRoot != "" {
+			return launchSpec{
+				Command:    "go",
+				Args:       []string{"run", "./research/agent-rpc/cmd/agent-rpc", "--bridge"},
+				WorkingDir: repoRoot,
+			}, nil
+		}
+		return launchSpec{Command: "agent-rpc", Args: []string{"--bridge"}}, nil
+	}
+	if command == "agent-rpc" && len(args) == 0 {
+		args = []string{"--bridge"}
+	}
+	return launchSpec{Command: command, Args: args, WorkingDir: repoRootIfGoRun(command, args, repoRoot)}, nil
+}
+
+func compactArgs(args []string) []string {
+	result := make([]string, 0, len(args))
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg != "" {
+			result = append(result, arg)
+		}
+	}
+	return result
+}
+
+func repoRootIfGoRun(command string, args []string, repoRoot string) string {
+	if repoRoot == "" || command != "go" || len(args) < 2 {
+		return ""
+	}
+	if args[0] == "run" && strings.HasPrefix(args[1], "./research/agent-rpc/") {
+		return repoRoot
+	}
+	return ""
+}
+
+func findOmicronRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for dir := cwd; dir != "" && dir != "/"; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, "research", "agent-rpc", "cmd", "agent-rpc", "main.go")
+		if _, err := os.Stat(candidate); err == nil {
+			return dir, nil
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			break
+		}
+	}
+	return "", errors.New("omicron repo root not found")
 }
 
 func (s *BridgeService) stopAgent(agentID string) (LaunchedAgent, error) {

@@ -264,10 +264,12 @@ func renderDashboardHTML() string {
     <section class="card"><h2>Bridge</h2><pre id="bridge"></pre></section>
     <section class="card"><h2>Launch Agent</h2>
       <form id="launch-form">
-        <div><label>Agent ID<br><input name="agentId" value="agent-1" style="width:100%"></label></div>
+        <div><label>Agent ID<br><input name="agentId" value="agent-rpc-1" style="width:100%"></label></div>
         <div><label>Guild ID (optional)<br><input name="guildId" style="width:100%"></label></div>
         <div><label>Channel<br><select name="channelId" id="channel-select" style="width:100%"><option value="">Auto-assign</option></select></label></div>
-        <div><label>Command (optional)<br><input name="command" value="discoagent" style="width:100%"></label></div>
+        <div><label>Command (optional)<br><input name="command" value="go" style="width:100%"></label></div>
+        <div><label>Args (space-separated)<br><input name="args" value="run ./research/agent-rpc/cmd/agent-rpc --bridge" style="width:100%"></label></div>
+        <div class="muted" style="margin-top:8px">Leave command blank to use the default agent-rpc bridge launcher.</div>
         <div style="margin-top:10px"><button type="submit">Launch</button></div>
       </form>
       <div id="launch-result" class="muted" style="margin-top:10px"></div>
@@ -277,8 +279,8 @@ func renderDashboardHTML() string {
     <section class="card"><h2>Reactions</h2><pre id="reactions"></pre></section>
     <section class="card"><h2>Launched Agents</h2><div id="launched-controls"></div><pre id="launched"></pre></section>
     <section class="card"><h2>Harness Log Preview</h2><div id="ptylogs"></div></section>
-    <section class="card"><h2>PTY Input Preview</h2><div id="ptyinputs"></div></section>
-    <section class="card"><h2>PTY Transcript Preview</h2><div id="ptyoutputs"></div></section>
+    <section class="card"><h2>Legacy PTY Input Preview</h2><div id="ptyinputs"></div></section>
+    <section class="card"><h2>Legacy PTY Transcript Preview</h2><div id="ptyoutputs"></div></section>
     <section class="card"><h2>Recent Chats</h2><div id="chats"></div></section>
     <section class="card"><h2>Recent Attachments</h2><div id="attachments"></div></section>
     <section class="card"><h2>Audit Tail</h2><div id="audit"></div></section>
@@ -334,7 +336,8 @@ func renderDashboardHTML() string {
         agentId: String(form.get('agentId') || '').trim(),
         guildId: String(form.get('guildId') || '').trim(),
         channelId: String(form.get('channelId') || '').trim(),
-        command: String(form.get('command') || '').trim()
+        command: String(form.get('command') || '').trim(),
+        args: String(form.get('args') || '').trim().split(/\s+/).filter(Boolean)
       };
       const res = await fetch('/api/launch-agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const text = await res.text();
