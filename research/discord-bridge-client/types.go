@@ -1,0 +1,60 @@
+package main
+
+import "time"
+
+type JoinRequest struct {
+	AgentID            string   `json:"agentId"`
+	CredsRef           string   `json:"credsRef"`
+	RequestedGuildID   string   `json:"requestedGuildId,omitempty"`
+	RequestedChannelID string   `json:"requestedChannelId"`
+	Scope              []string `json:"scope,omitempty"`
+}
+
+type InboundEvent struct {
+	EventID     string             `json:"eventId"`
+	MessageID   string             `json:"messageId"`
+	AgentID     string             `json:"agentId"`
+	GuildID     string             `json:"guildId,omitempty"`
+	ChannelID   string             `json:"channelId"`
+	AuthorID    string             `json:"authorId"`
+	AuthorName  string             `json:"authorName"`
+	Content     string             `json:"content"`
+	Timestamp   time.Time          `json:"timestamp"`
+	Attachments []AttachmentRecord `json:"attachments,omitempty"`
+	ReplyToID   string             `json:"replyToId,omitempty"`
+}
+
+type AttachmentRecord struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	URL         string `json:"url"`
+	LocalPath   string `json:"localPath,omitempty"`
+	Size        int    `json:"size"`
+	ContentType string `json:"contentType,omitempty"`
+}
+
+type EventPollResponse struct {
+	Events []InboundEvent `json:"events"`
+}
+
+type StatusUpdateRequest struct {
+	MessageID string `json:"messageId"`
+	Reaction  string `json:"reaction"`
+}
+
+type CompleteRequest struct {
+	MessageID     string `json:"messageId"`
+	Content       string `json:"content"`
+	FinalReaction string `json:"finalReaction,omitempty"`
+}
+
+type HarnessState struct {
+	ProcessedEventIDs map[string]bool `json:"processedEventIds"`
+	LastJoinAt        time.Time       `json:"lastJoinAt,omitempty"`
+	LastMessageID     string          `json:"lastMessageId,omitempty"`
+}
+
+type CompletionResult struct {
+	Text          string
+	FinalReaction string
+}
