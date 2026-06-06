@@ -121,9 +121,41 @@ func readLaunchedAgentLogs(agents map[string]LaunchedAgent, limit int) map[strin
 		if agent.LogPath == "" {
 			continue
 		}
-		logs[agentID] = readLastLines(agent.LogPath, limit)
+		logs[agentID] = readAgentLogSince(agent.LogPath, agent.StartedAt, limit)
 	}
 	return logs
+}
+
+func readAgentLogSince(path string, startedAt time.Time, limit int) []string {
+	lines := readAllLines(path)
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if ts, ok := parseLogTimestamp(trimmed); ok {
+			if ts.Before(startedAt.Add(-1 * time.Second)) {
+				continue
+			}
+		}
+		filtered = append(filtered, trimmed)
+	}
+	if len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+	return filtered
+}
+
+func parseLogTimestamp(line string) (time.Time, bool) {
+	if len(line) < len("2006/01/02 15:04:05") {
+		return time.Time{}, false
+	}
+	ts, err := time.Parse("2006/01/02 15:04:05", line[:len("2006/01/02 15:04:05")])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ts.UTC(), true
 }
 
 func readRecentChats(root string, limit int) []chatLogRecord {
@@ -281,7 +313,7 @@ func renderDashboardHTML() string {
 </html>`
 }
 
-func readLastLines(path string, limit int) []string {
+func readAllLines(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -290,14 +322,23 @@ func readLastLines(path string, limit int) []string {
 	var lines []string
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
+		lines = append(lines, s.Text())
+	}
+	return lines
+}
+
+func readLastLines(path string, limit int) []string {
+	lines := readAllLines(path)
+	trimmed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		lines = append(lines, line)
-		if len(lines) > limit {
-			lines = lines[1:]
-		}
+		trimmed = append(trimmed, line)
 	}
-	return lines
+	if len(trimmed) > limit {
+		return trimmed[len(trimmed)-limit:]
+	}
+	return trimmed
 }

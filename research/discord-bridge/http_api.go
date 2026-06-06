@@ -273,16 +273,77 @@ func contains(items []string, needle string) bool {
 }
 
 func (s *BridgeService) sendChannelMessage(channelID, content, replyTo string) error {
+	chunks := splitDiscordMessage(content, 1800)
+	if len(chunks) == 0 {
+		chunks = []string{"[discord-bridge] empty reply"}
+	}
 	if s.cfg.DryRun {
-		return s.appendAudit("discord.send.dry_run", map[string]any{"channelId": channelID, "content": content, "replyTo": replyTo})
+		return s.appendAudit("discord.send.dry_run", map[string]any{"channelId": channelID, "chunkCount": len(chunks), "content": content, "replyTo": replyTo})
 	}
-	msg := &discordgo.MessageSend{Content: content}
-	if replyTo != "" {
-		msg.Reference = &discordgo.MessageReference{MessageID: replyTo, ChannelID: channelID}
+	for i, chunk := range chunks {
+		msg := &discordgo.MessageSend{Content: chunk}
+		if i == 0 && replyTo != "" {
+			msg.Reference = &discordgo.MessageReference{MessageID: replyTo, ChannelID: channelID}
+		}
+		if _, err := s.dg.ChannelMessageSendComplex(channelID, msg); err != nil {
+			return err
+		}
 	}
-	_, err := s.dg.ChannelMessageSendComplex(channelID, msg)
-	if err == nil {
-		_ = s.appendAudit("discord.send", map[string]any{"channelId": channelID, "content": content, "replyTo": replyTo})
+	_ = s.appendAudit("discord.send", map[string]any{"channelId": channelID, "chunkCount": len(chunks), "contentLength": len(content), "replyTo": replyTo})
+	return nil
+}
+
+func splitDiscordMessage(content string, maxLen int) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
 	}
-	return err
+	if maxLen <= 0 || len(content) <= maxLen {
+		return []string{content}
+	}
+	paragraphs := strings.Split(content, "\n")
+	chunks := make([]string, 0, len(paragraphs))
+	var current strings.Builder
+	flush := func() {
+		if current.Len() > 0 {
+			chunks = append(chunks, strings.TrimSpace(current.String()))
+			current.Reset()
+		}
+	}
+	for _, paragraph := range paragraphs {
+		paragraph = strings.TrimRight(paragraph, "\r")
+		if paragraph == "" {
+			if current.Len()+1 > maxLen {
+				flush()
+			}
+			if current.Len() > 0 {
+				current.WriteString("\n")
+			}
+			continue
+		}
+		for len(paragraph) > maxLen {
+			if current.Len() > 0 {
+				flush()
+			}
+			splitAt := maxLen
+			if idx := strings.LastIndex(paragraph[:maxLen], " "); idx > maxLen/2 {
+				splitAt = idx
+			}
+			chunks = append(chunks, strings.TrimSpace(paragraph[:splitAt]))
+			paragraph = strings.TrimSpace(paragraph[splitAt:])
+		}
+		candidate := paragraph
+		if current.Len() > 0 {
+			candidate = current.String() + "\n" + paragraph
+		}
+		if len(candidate) > maxLen {
+			flush()
+		}
+		if current.Len() > 0 {
+			current.WriteString("\n")
+		}
+		current.WriteString(paragraph)
+	}
+	flush()
+	return chunks
 }
