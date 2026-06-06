@@ -6,6 +6,8 @@ Add a Discord bridge client harness that connects to the always-on Discord bridg
 
 The harness should make the agent feel like it is running in a normal terminal session, while the harness owns Discord transport, binding, polling, status updates, and final reply delivery.
 
+For Pi-backed agents, inbound work should still be delivered through PTY input so the agent continues to experience an ordinary terminal session. Outbound assistant replies should be derived from Pi's structured JSONL logs rather than scraped from terminal escape-coded PTY output.
+
 This must be enforced by the harness runtime, not by prompting the model to remember Discord behavior.
 
 ---
@@ -83,6 +85,10 @@ BridgeClientConfig
   pollIntervalMs?: ℕ
   cols?: ℕ
   rows?: ℕ
+  outputMode?: seq CHAR
+  piSessionRoot?: seq CHAR
+  piSessionArchiveRoot?: seq CHAR
+  piLogPreference?: seq CHAR
 ```
 
 ### Data examples
@@ -99,7 +105,11 @@ BridgeClientConfig
   "cwd": "/home/easter/omicron",
   "pollIntervalMs": 1500,
   "cols": 120,
-  "rows": 40
+  "rows": 40,
+  "outputMode": "pi-jsonl",
+  "piSessionRoot": "~/.pi/agent/sessions",
+  "piSessionArchiveRoot": "~/.pi/agent/session-archive",
+  "piLogPreference": "session-archive"
 }
 ```
 
@@ -108,6 +118,7 @@ BridgeClientConfig
 - Default to PTY mode.
 - Default the command to `pi`.
 - Default the bridge URL to local loopback.
+- Add harness-owned config for structured Pi log discovery.
 - Keep config outside the agent prompt path.
 
 ---
@@ -200,6 +211,7 @@ where
 - Keep stdout/stderr merged through the PTY.
 - Allow resize later if needed.
 - Treat the PTY wrapper as the durable harness boundary.
+- Keep PTY as the authoritative inbound control path even when outbound replies are sourced from structured logs.
 
 ---
 
@@ -279,6 +291,7 @@ where
 - Include author, channel, timestamps, and attachments when present.
 - Make it obvious to the agent that the source is bridge-mediated.
 - Avoid leaking transport mechanics into normal user prompt flow unless intentional.
+- Write injected work through PTY so the agent continues to believe it is talking only to a terminal session.
 
 ---
 
@@ -329,6 +342,8 @@ where
 
 When the agent finishes a bridge-originated turn, the harness sends the final response back through the bridge.
 
+For Pi-backed agents, the harness should derive reply content from Pi's structured JSONL session logs rather than from PTY screen scraping. The harness may still use PTY observations for liveness, fallback behavior, or debugging, but PTY output is not the authoritative response source when Pi logs are available.
+
 The harness may also provide the bridge-approved final emoji choice.
 
 ### Z Spec
@@ -360,10 +375,60 @@ where
 - Use `POST /agents/{agentId}/complete`.
 - Keep final reactions constrained to the bridge palette.
 - Send completion only once per bridge event.
+- Prefer Pi JSONL log tailing as the authoritative completion source.
+- Fall back to PTY-derived completion only for non-Pi commands or when no usable Pi log source is registered.
 
 ---
 
-## 9. `HarnessSessionState`
+## 9. `PiStructuredOutputSource`
+
+### Prose Spec
+
+For Pi-backed agents, the harness should resolve and register a structured JSONL output source for the launched agent session.
+
+The harness owns this registration step. The agent process itself still runs in a PTY and does not need to know about Discord or about log relaying semantics.
+
+### Z Spec
+
+```text
+PiStructuredOutputSource
+  agentId: seq CHAR
+  mode: seq CHAR
+  sessionFile?: seq CHAR
+  archiveFile?: seq CHAR
+  registeredAt: seq CHAR
+  active: 𝔹
+where
+  agentId ≠ ⟨⟩
+  mode = "pi-jsonl"
+  registeredAt ≠ ⟨⟩
+  active = true
+```
+
+### Data examples
+
+```json
+{
+  "agentId": "main",
+  "mode": "pi-jsonl",
+  "sessionFile": "/home/easter/.pi/agent/sessions/--home-easter-omicron--/2026-06-06T03-47-32-000Z_abc.jsonl",
+  "archiveFile": "/home/easter/.pi/agent/session-archive/2026/06/06/2026-06-06T03-47-32Z_d388.jsonl",
+  "registeredAt": "2026-06-06T03:47:33Z",
+  "active": true
+}
+```
+
+### Implementation suggestions / specifics
+
+- Allow the harness to be configured with both native Pi session roots and session-archive roots.
+- Resolve the active log file after agent launch using launch time, cwd, and newest matching file heuristics.
+- Prefer session-archive JSONL when it is present and current.
+- Fall back to native Pi session JSONL when session-archive is unavailable.
+- Keep the output-source registration harness-owned and outside the prompt path.
+
+---
+
+## 10. `HarnessSessionState`
 
 ### Prose Spec
 
@@ -398,7 +463,7 @@ HarnessSessionState
 
 ---
 
-## 10. `HarnessInvariants`
+## 11. `HarnessInvariants`
 
 ### Prose Spec
 
@@ -406,6 +471,9 @@ HarnessSessionState
 - The agent runs inside a PTY.
 - The harness owns Discord/bridge I/O.
 - The agent does not directly own Discord transport semantics.
+- Inbound work is delivered to the agent through PTY input.
+- For Pi-backed agents, outbound reply extraction should come from structured JSONL logs when available.
+- PTY output may be used for liveness, fallback, and debugging, but is not the preferred authoritative output source for Pi.
 - Status and completion updates go through the bridge.
 - Duplicate completion should be prevented by harness and bridge state.
 
