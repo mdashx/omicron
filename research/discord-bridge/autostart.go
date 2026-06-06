@@ -104,11 +104,6 @@ func (s *BridgeService) ensureManagedAgentRunning(agentID string) error {
 		s.mu.Unlock()
 		return nil
 	}
-	if binding, ok := s.state.Bindings[agentID]; ok && binding.Active {
-		// Assume externally running / already joined for now; avoid duplicate spawn.
-		s.mu.Unlock()
-		return nil
-	}
 	command := agent.Command
 	args := append([]string(nil), agent.Args...)
 	workingDir := agent.WorkingDir
