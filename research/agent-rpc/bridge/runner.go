@@ -101,13 +101,20 @@ func (r *Runner) pollOnce(ctx context.Context) error {
 }
 
 func (r *Runner) handleEvent(ctx context.Context, event InboundEvent) error {
-	_ = r.client.UpdateStatus(ctx, r.cfg.AgentID, StatusRequest{MessageID: event.MessageID, Reaction: r.cfg.InProgressReaction})
+	if event.MessageID != "" {
+		_ = r.client.UpdateStatus(ctx, r.cfg.AgentID, StatusRequest{MessageID: event.MessageID, Reaction: r.cfg.InProgressReaction})
+	}
+	if event.Kind == "slash_passthrough" {
+		return r.handleSlashPassthrough(ctx, event)
+	}
 	message := formatBridgeMessage(event)
 	result, err := r.harness.Prompt(ctx, message)
 	if err != nil {
 		return err
 	}
-	_ = result
+	if event.MessageID == "" {
+		return nil
+	}
 	if err := r.client.Complete(ctx, r.cfg.AgentID, CompleteRequest{
 		MessageID:     event.MessageID,
 		Content:       result.Text,
@@ -116,6 +123,33 @@ func (r *Runner) handleEvent(ctx context.Context, event InboundEvent) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) handleSlashPassthrough(ctx context.Context, event InboundEvent) error {
+	var content string
+	switch event.CommandName {
+	case "new":
+		if err := r.harness.NewSession(ctx); err != nil {
+			return err
+		}
+		content = "[discord-bridge]\nForwarded to Pi: /new\n\nA new Pi session was created for this room agent."
+	case "state":
+		state, err := r.harness.GetState(ctx)
+		if err != nil {
+			return err
+		}
+		content = fmt.Sprintf("[discord-bridge]\nForwarded to Pi: /state\n\nSession: %s\nFile: %s\nStreaming: %v\nPending messages: %d\nThinking: %s", state.SessionID, state.SessionFile, state.IsStreaming, state.PendingMessages, state.ThinkingLevel)
+	default:
+		content = fmt.Sprintf("[discord-bridge]\nPassthrough not implemented for: %s", event.Content)
+	}
+	if event.MessageID == "" {
+		return nil
+	}
+	return r.client.Complete(ctx, r.cfg.AgentID, CompleteRequest{
+		MessageID:     event.MessageID,
+		Content:       content,
+		FinalReaction: r.cfg.SuccessReaction,
+	})
 }
 
 func formatBridgeMessage(event InboundEvent) string {

@@ -78,23 +78,38 @@ func (s *BridgeService) handleSlashCommand(m *discordgo.MessageCreate, hasBindin
 			"to":        cmd.Name,
 		})
 	}
-	text, execErr := s.executeAdminCommand(cmd, hasBinding, binding)
-	if execErr != nil {
+
+	if cmd.IsPassthrough {
+		handled, err := s.handlePassthroughCommand(m, hasBinding, binding, cmd)
+		if err != nil {
+			_ = s.appendAudit("bridge.admin.failed", map[string]any{
+				"authorId":  m.Author.ID,
+				"channelId": m.ChannelID,
+				"command":   m.Content,
+				"error":     err.Error(),
+			})
+			_ = s.setManagedReaction(m.ChannelID, m.ID, failureReaction(s.cfg))
+			_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Command failed.", err.Error()), m.ID)
+			return
+		}
+		if handled {
+			return
+		}
+	}
+
+	text, err := s.executeAdminCommand(cmd, hasBinding, binding)
+	if err != nil {
 		_ = s.appendAudit("bridge.admin.failed", map[string]any{
 			"authorId":  m.Author.ID,
 			"channelId": m.ChannelID,
 			"command":   m.Content,
-			"error":     execErr.Error(),
+			"error":     err.Error(),
 		})
 		_ = s.setManagedReaction(m.ChannelID, m.ID, failureReaction(s.cfg))
-		_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Command failed.", execErr.Error()), m.ID)
+		_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Command failed.", err.Error()), m.ID)
 		return
 	}
-	kind := "bridge.admin.executed"
-	if cmd.IsPassthrough {
-		kind = "bridge.admin.forwarded"
-	}
-	_ = s.appendAudit(kind, map[string]any{
+	_ = s.appendAudit("bridge.admin.executed", map[string]any{
 		"authorId":   m.Author.ID,
 		"channelId":  m.ChannelID,
 		"command":    m.Content,
@@ -104,14 +119,41 @@ func (s *BridgeService) handleSlashCommand(m *discordgo.MessageCreate, hasBindin
 	_ = s.sendChannelMessage(m.ChannelID, text, m.ID)
 }
 
-func (s *BridgeService) executeAdminCommand(cmd adminCommand, hasBinding bool, binding Binding) (string, error) {
-	if cmd.IsPassthrough {
-		return bridgeResponse("Slash command recognized.", fmt.Sprintf("Passthrough candidate: %s\nBridge policy has not enabled live Pi passthrough yet.", cmd.PassthroughCmd)), nil
+func (s *BridgeService) handlePassthroughCommand(m *discordgo.MessageCreate, hasBinding bool, binding Binding, cmd adminCommand) (bool, error) {
+	if !hasBinding {
+		return true, fmt.Errorf("no bound agent is available for %s in this channel", cmd.PassthroughCmd)
 	}
+	if cmd.Name != "new" && cmd.Name != "state" {
+		_ = s.appendAudit("bridge.admin.forwarded", map[string]any{
+			"authorId":   m.Author.ID,
+			"channelId":  m.ChannelID,
+			"command":    m.Content,
+			"normalized": cmd.Name,
+			"mode":       "not-enabled",
+		})
+		_ = s.setManagedReaction(m.ChannelID, m.ID, successReaction(s.cfg))
+		_ = s.sendChannelMessage(m.ChannelID, bridgeResponse("Slash command recognized.", fmt.Sprintf("Passthrough candidate: %s\nBridge policy has not enabled live Pi passthrough for this command yet.", cmd.PassthroughCmd)), m.ID)
+		return true, nil
+	}
+	if err := s.enqueuePassthroughCommand(m, binding, cmd); err != nil {
+		return true, err
+	}
+	_ = s.appendAudit("bridge.admin.forwarded", map[string]any{
+		"authorId":    m.Author.ID,
+		"channelId":   m.ChannelID,
+		"command":     m.Content,
+		"normalized":  cmd.Name,
+		"mode":        "passthrough",
+		"targetAgent": binding.AgentID,
+	})
+	return true, nil
+}
+
+func (s *BridgeService) executeAdminCommand(cmd adminCommand, hasBinding bool, binding Binding) (string, error) {
 	switch cmd.Name {
 	case "help":
 		return bridgeResponse("Available bridge slash commands",
-			"/help\n/status\n/agents\n/bindings\n/activity\n/agent <id> status\n/agent <id> start\n/agent <id> stop\n/agent <id> restart\n/health (alias for /status)\n/rooms (alias for /agents)\n/new, /state, /compact, /model (recognized passthrough candidates)"), nil
+			"/help\n/status\n/agents\n/bindings\n/activity\n/agent <id> status\n/agent <id> start\n/agent <id> stop\n/agent <id> restart\n/health (alias for /status)\n/rooms (alias for /agents)\n/new, /state (enabled passthrough)\n/compact, /model (recognized passthrough candidates)"), nil
 	case "status":
 		stats := s.overviewStats()
 		return bridgeResponse("Bridge status",
@@ -199,6 +241,27 @@ func (s *BridgeService) executeAgentSubcommand(args []string, hasBinding bool, b
 	default:
 		return "", fmt.Errorf("unknown agent action: %s", action)
 	}
+}
+
+func (s *BridgeService) enqueuePassthroughCommand(msg *discordgo.MessageCreate, binding Binding, cmd adminCommand) error {
+	event := InboundEvent{
+		EventID:     fmt.Sprintf("cmd_%d", time.Now().UnixNano()),
+		MessageID:   msg.ID,
+		AgentID:     binding.AgentID,
+		GuildID:     binding.GuildID,
+		ChannelID:   binding.ChannelID,
+		AuthorID:    msg.Author.ID,
+		AuthorName:  msg.Author.Username,
+		Content:     cmd.PassthroughCmd,
+		Kind:        "slash_passthrough",
+		CommandName: cmd.Name,
+		Timestamp:   time.Now().UTC(),
+	}
+	s.mu.Lock()
+	s.queues[binding.AgentID] = append(s.queues[binding.AgentID], event)
+	err := s.saveStateLocked()
+	s.mu.Unlock()
+	return err
 }
 
 func (s *BridgeService) launchManagedAgent(agentID string) (LaunchedAgent, error) {

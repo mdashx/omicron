@@ -182,6 +182,18 @@ func (h *Harness) GetState(ctx context.Context) (State, error) {
 	return state, nil
 }
 
+func (h *Harness) NewSession(ctx context.Context) error {
+	resp, err := h.sendCommand(ctx, map[string]any{"type": "new_session"})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	_, err = h.GetState(ctx)
+	return err
+}
+
 func (h *Harness) Prompt(ctx context.Context, message string) (PromptResult, error) {
 	h.requestMu.Lock()
 	defer h.requestMu.Unlock()

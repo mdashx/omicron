@@ -246,6 +246,8 @@ type InboundEvent struct {
 	AuthorID    string             `json:"authorId"`
 	AuthorName  string             `json:"authorName"`
 	Content     string             `json:"content"`
+	Kind        string             `json:"kind,omitempty"`
+	CommandName string             `json:"commandName,omitempty"`
 	Timestamp   time.Time          `json:"timestamp"`
 	Attachments []AttachmentRecord `json:"attachments,omitempty"`
 	ReplyToID   string             `json:"replyToId,omitempty"`
