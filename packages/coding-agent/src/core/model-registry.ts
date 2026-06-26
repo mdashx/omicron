@@ -697,7 +697,7 @@ export class ModelRegistry {
 	 * This is a fast check that doesn't refresh OAuth tokens.
 	 */
 	getAvailable(): Model<Api>[] {
-		return this.models.filter((m) => this.hasConfiguredAuth(m));
+		return this.models.filter((m) => m.provider !== "anthropic" && this.hasConfiguredAuth(m));
 	}
 
 	/**

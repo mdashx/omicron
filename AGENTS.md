@@ -7,6 +7,7 @@
 - No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
 - Technical prose only, be direct
 - When the user asks a question, answer it first before making edits or running implementation commands.
+- When the task involves GitHub, issues, PRs, or publishing changes, follow the repo's GitHub workflow guidance before acting.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
 ## Code Quality
@@ -33,6 +34,7 @@
 - Put issue-specific regressions under `packages/coding-agent/test/suite/regressions/` named `<issue-number>-<short-slug>.test.ts`.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 - Never commit unless the user asks.
+- If the user explicitly asks to publish changes upstream, commit only your own files, verify `git status`, and push to the configured upstream branch.
 
 ## Dependency and Install Security
 
