@@ -1,2 +1,5 @@
 
 .runtime/
+
+# compiled binary
+/discord-bridge
