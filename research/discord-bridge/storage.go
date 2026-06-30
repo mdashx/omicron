@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -89,31 +90,89 @@ func (s *BridgeService) persistAttachments(msg *discordgo.Message) []AttachmentR
 	return result
 }
 
+// attachmentClient bounds every stage of an attachment download so a stalled
+// Discord CDN connection can never hang the message handler indefinitely. The
+// overall Timeout is generous enough for large (boosted-guild) uploads while
+// still guaranteeing the request eventually returns.
+var attachmentClient = &http.Client{
+	Timeout: 10 * time.Minute,
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
+const attachmentDownloadAttempts = 3
+
 func (s *BridgeService) downloadAttachment(channelID, messageID string, attachment *discordgo.MessageAttachment) (string, error) {
 	path := filepath.Join(s.cfg.DownloadsRoot, safeID(channelID), fmt.Sprintf("%s_%s", safeID(messageID), sanitizeFilename(attachment.Filename)))
+	// Only a fully-written file ever lands at `path` (see the atomic rename
+	// below), so an existing file here is safe to treat as already downloaded.
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	resp, err := http.Get(attachment.URL)
+
+	var lastErr error
+	for attempt := 1; attempt <= attachmentDownloadAttempts; attempt++ {
+		retryable, err := fetchToFile(attachment.URL, path)
+		if err == nil {
+			return path, nil
+		}
+		lastErr = err
+		if !retryable || attempt == attachmentDownloadAttempts {
+			break
+		}
+		// Linear backoff; the signed CDN URL stays valid well beyond this window.
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	return "", lastErr
+}
+
+// fetchToFile downloads url into a temp file alongside dest and atomically
+// renames it into place on success, so dest never holds a partial download.
+// The boolean reports whether the failure is worth retrying.
+func fetchToFile(url, dest string) (retryable bool, err error) {
+	resp, err := attachmentClient.Get(url)
 	if err != nil {
-		return "", err
+		return true, err // network/timeout errors are transient
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("attachment download status %d", resp.StatusCode)
+		// Retry on rate limiting and server errors; treat other 4xx as permanent.
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return retry, fmt.Errorf("attachment download status %d", resp.StatusCode)
 	}
-	f, err := os.Create(path)
+
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".dl-*.part")
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		return "", err
+	tmpName := tmp.Name()
+	// Clean up the temp file unless the rename below succeeds.
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		return true, err // interrupted body read is transient
 	}
-	return path, nil
+	if err := tmp.Close(); err != nil {
+		return true, err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		return false, err
+	}
+	cleanup = false
+	return false, nil
 }
 
 func (s *BridgeService) setManagedReaction(channelID, messageID, emoji string) error {
